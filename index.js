@@ -1,0 +1,673 @@
+import Head from 'next/head';
+import { useState, useEffect, useCallback } from 'react';
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+function num(v) { const n = parseFloat(String(v || 0).replace(/,/g, '')); return isNaN(n) ? 0 : n; }
+function fmtDate(d) { return d ? String(d).split('T')[0] : '—'; }
+
+const BUCKETS = [
+  { label: 'DOC > 90',  min: 91, max: Infinity },
+  { label: 'DOC 60–90', min: 61, max: 90 },
+  { label: 'DOC 30–60', min: 31, max: 60 },
+  { label: 'DOC 15–30', min: 16, max: 30 },
+  { label: 'DOC < 15',  min: 0,  max: 15 },
+];
+
+function getAction(r) {
+  const d = r.doc;
+  if (d === 0 && r.inv === 0) return { label: 'Procure now', cls: 'ab-procure-urgent' };
+  if (d <= 15)  return { label: 'Procure',    cls: 'ab-procure'   };
+  if (d <= 30)  return { label: 'Watch',      cls: 'ab-watch'     };
+  if (d <= 60)  return { label: 'Healthy',    cls: 'ab-healthy'   };
+  if (d <= 90)  return { label: 'Overstock',  cls: 'ab-overstock' };
+  if (d <= 180) return { label: 'Liquidate',  cls: 'ab-liquidate' };
+  return               { label: 'Dead stock', cls: 'ab-deadstock'  };
+}
+
+function isSpike(r) { return r.drr7 > 0 && r.drr30 > 0 && (r.drr7 / r.drr30) >= 1.5; }
+function spikePriority(r) { const rt = r.drr7 / r.drr30; return (rt >= 3 || r.doc < 15) ? 1 : rt >= 2 ? 2 : 3; }
+
+function docGradColor(doc) {
+  const t = Math.min(doc / 15, 1);
+  return `rgb(${Math.round(139 + (252 - 139) * t)},${Math.round(28 + (235 - 28) * t)},${Math.round(28 + (235 - 28) * t)})`;
+}
+
+// ── sub-components ────────────────────────────────────────────────────────────
+function ActionBadge({ r }) {
+  const a = getAction(r);
+  return <span className={`badge ${a.cls}`}>{a.label}</span>;
+}
+
+function DocBadge({ doc }) {
+  if (doc > 60)  return <span className="badge" style={{ background: 'var(--amber-dim)', color: 'var(--amber)', border: '1px solid rgba(192,120,32,.3)' }}>{doc}d</span>;
+  if (doc > 30)  return <span className="badge" style={{ background: 'var(--amber-dim)', color: 'var(--amber)', border: '1px solid rgba(192,120,32,.2)' }}>{doc}d</span>;
+  if (doc > 15)  return <span className="badge" style={{ background: 'var(--blue-dim)',  color: 'var(--blue)',  border: '1px solid rgba(26,95,165,.25)' }}>{doc}d</span>;
+  const bg = docGradColor(doc);
+  return <span className="badge" style={{ background: bg, color: doc < 5 ? '#FFE0E0' : '#3A0A0A', border: `1px solid ${bg}` }}>{doc}d</span>;
+}
+
+function StatusPill({ status }) {
+  if (status === 'COMPLETE')               return <span className="sp-comp">Complete</span>;
+  if (status === 'APPROVED')               return <span className="sp-appr">Approved</span>;
+  if (status === 'WAITING_FOR_APPROVAL')   return <span className="sp-wait">Pending</span>;
+  return <span className="sp-wait">{status}</span>;
+}
+
+function POCell({ r, poBySkuMap, onOpen }) {
+  const pos  = poBySkuMap[r.sku] || [];
+  const open = pos.filter(p => p.pending > 0);
+  if (!pos.length) return <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>—</span>;
+  if (open.length) return <button className="po-btn" onClick={() => onOpen(r.sku, r.name)}>{open.length} open PO{open.length !== 1 ? 's' : ''}</button>;
+  return <button className="po-btn-none" onClick={() => onOpen(r.sku, r.name)}>all received</button>;
+}
+
+// ── main component ────────────────────────────────────────────────────────────
+export default function Dashboard() {
+  const [inv,       setInv]       = useState([]);
+  const [poBySkuMap, setPoBySkuMap] = useState({});
+  const [grnData,   setGrnData]   = useState([]);
+  const [fetchedAt, setFetchedAt] = useState(null);
+  const [loading,   setLoading]   = useState(false);
+  const [errors,    setErrors]    = useState({});
+  const [status,    setStatus]    = useState('idle'); // idle | loading | ok | error
+
+  const [activeTab,   setActiveTab]   = useState('doc');
+  const [catFilter,   setCatFilter]   = useState('');
+  const [poSearch,    setPoSearch]    = useState('');
+  const [poStatusF,   setPoStatusF]   = useState('');
+  const [skuPanel,    setSkuPanel]    = useState(null);  // { cat, bucketIdx }
+  const [poPanel,     setPoPanel]     = useState(null);  // { sku, name }
+  const [toast,       setToast]       = useState(null);
+
+  // ── toast ──
+  const showToast = useCallback((msg, type = 'ok') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  // ── fetch from secure proxy ──
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    setStatus('loading');
+    showToast('Fetching live data from Uniware…', 'info');
+    try {
+      const res  = await fetch('/api/uniware?type=all');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Server error');
+
+      setInv(data.inventory || []);
+      setPoBySkuMap(data.po || {});
+      setGrnData(data.grn || []);
+      setFetchedAt(data.fetchedAt);
+      setErrors(data.errors || {});
+      setStatus('ok');
+      showToast(`✓ Data refreshed — ${(data.inventory || []).length} SKUs loaded`, 'ok');
+    } catch (err) {
+      setStatus('error');
+      showToast('Fetch failed: ' + err.message, 'err');
+    } finally {
+      setLoading(false);
+    }
+  }, [showToast]);
+
+  // Auto-fetch on mount
+  useEffect(() => { fetchAll(); }, []);
+
+  // ── derived data ──
+  const cats        = [...new Set(inv.map(r => r.cat))].sort();
+  const filteredInv = catFilter ? inv.filter(r => r.cat === catFilter) : inv;
+  const spikes      = inv.filter(isSpike).map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) })).sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
+
+  // Metrics
+  const pn  = inv.filter(r => r.doc === 0 && r.inv === 0).length;
+  const pc  = inv.filter(r => r.doc > 0 && r.doc <= 15).length;
+  const ovs = inv.filter(r => r.doc > 60 && r.doc <= 180).length;
+  const ds  = inv.filter(r => r.doc > 180).length;
+  const sp  = spikes.length;
+  const ol  = Object.values(poBySkuMap).flat().filter(p => p.pending > 0).length;
+
+  // PO tab rows
+  const allPORows = Object.entries(poBySkuMap).flatMap(([sku, pos]) => pos.map(p => ({ ...p, sku })));
+  const filteredPO = allPORows
+    .filter(r => {
+      const q = poSearch.toLowerCase();
+      return (!q || r.sku.toLowerCase().includes(q) || r.vendor.toLowerCase().includes(q) || (r.po || '').toLowerCase().includes(q))
+          && (!poStatusF || r.status === poStatusF);
+    })
+    .sort((a, b) => { const ord = { WAITING_FOR_APPROVAL: 0, APPROVED: 1, COMPLETE: 2 }; return (ord[a.status] || 1) - (ord[b.status] || 1) || b.pending - a.pending; });
+
+  // SKU panel items
+  let skuPanelItems = [];
+  if (skuPanel) {
+    const { cat, bucketIdx } = skuPanel;
+    const isSpikeBucket = bucketIdx === 5;
+    skuPanelItems = inv.filter(r => {
+      if (r.cat !== cat) return false;
+      if (isSpikeBucket) return isSpike(r);
+      const d = r.doc;
+      if (bucketIdx === 0) return d > 90;
+      if (bucketIdx === 1) return d >= 61 && d <= 90;
+      if (bucketIdx === 2) return d >= 31 && d <= 60;
+      if (bucketIdx === 3) return d >= 16 && d <= 30;
+      if (bucketIdx === 4) return d >= 0  && d <= 15;
+      return false;
+    });
+    if (isSpikeBucket) skuPanelItems.sort((a, b) => spikePriority(a) - spikePriority(b));
+  }
+
+  const invMap = Object.fromEntries(inv.map(r => [r.sku, r.name]));
+
+  // ── render ────────────────────────────────────────────────────────────────
+  return (
+    <>
+      <Head>
+        <title>Weekly Review Dashboard</title>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+      </Head>
+
+      <div className="shell">
+        {/* TOP BAR */}
+        <div className="top-bar">
+          <div className="brand">
+            <div className="brand-icon"><i className="ti ti-chart-dots-3" /></div>
+            <div className="brand-text">
+              <h1>Weekly Review Dashboard</h1>
+              <p>inventory · doc · drr · actions · pos · facility: MSKT_FZP</p>
+            </div>
+          </div>
+          <div className="top-right">
+            <button className="btn-refresh" onClick={fetchAll} disabled={loading}>
+              <i className={`ti ${loading ? 'ti-loader-2 spin' : 'ti-refresh'}`} style={{ fontSize: 13 }} />
+              {loading ? 'Fetching…' : 'Refresh from Uniware'}
+            </button>
+            <div className="time-chip">
+              <span className={`live-dot ${status === 'loading' ? 'fetching' : status === 'error' ? 'error' : status === 'ok' ? '' : 'idle'}`} />
+              <span>
+                {status === 'idle'    && 'Initialising…'}
+                {status === 'loading' && 'Fetching live data…'}
+                {status === 'error'   && 'Fetch error — check console'}
+                {status === 'ok'      && fetchedAt && `Live · ${new Date(fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST`}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* ERROR STRIP */}
+        {Object.values(errors).some(Boolean) && (
+          <div className="error-strip">
+            <i className="ti ti-alert-triangle" style={{ fontSize: 14 }} />
+            <span>Partial data: {Object.entries(errors).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>
+          </div>
+        )}
+
+        {/* SKELETON / LOADING */}
+        {loading && inv.length === 0 && (
+          <div className="skeleton-wrap">
+            {[...Array(6)].map((_, i) => <div key={i} className="skeleton-card" />)}
+          </div>
+        )}
+
+        {/* METRICS */}
+        {inv.length > 0 && (
+          <div className="metrics">
+            {[
+              { lbl: 'Procure now',          val: pn,  sub: 'doc=0 · no stock',  cls: 'c-red',    icon: 'ti-alert-circle'   },
+              { lbl: 'Procure',              val: pc,  sub: 'doc 1–15 days',     cls: 'c-red',    icon: 'ti-shopping-cart'  },
+              { lbl: 'Overstock/Liquidate',  val: ovs, sub: 'doc 61–180 days',   cls: 'c-blue',   icon: 'ti-archive'        },
+              { lbl: 'Dead stock',           val: ds,  sub: 'doc > 180 days',    cls: 'c-teal',   icon: 'ti-ban'            },
+              { lbl: 'Sales spikes',         val: sp,  sub: '7d drr ≥ 1.5× 30d',cls: 'c-amber',  icon: 'ti-flame'          },
+              { lbl: 'Open PO lines',        val: ol,  sub: 'pending delivery',  cls: 'c-green',  icon: 'ti-clipboard-list' },
+            ].map(c => (
+              <div key={c.lbl} className={`mc ${c.cls}`}>
+                <div className="lbl"><i className={`ti ${c.icon}`} style={{ fontSize: 11 }} /> {c.lbl}</div>
+                <div className="val">{c.val}</div>
+                <div className="sub">{c.sub}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* TABS */}
+        <div className="tab-bar">
+          {[
+            { id: 'doc',    icon: 'ti-layout-grid',    label: 'DOC ranges'  },
+            { id: 'po',     icon: 'ti-clipboard-list', label: 'Open POs'    },
+            { id: 'spikes', icon: 'ti-flame',          label: 'Sales spikes'},
+            { id: 'grn',    icon: 'ti-package-import', label: 'GRN'         },
+          ].map(t => (
+            <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); }}>
+              <i className={`ti ${t.icon}`} style={{ fontSize: 13 }} />{t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* PO PANEL (SKU drill) */}
+        {poPanel && (
+          <div className="panel-wrap open" style={{ marginBottom: '1.25rem' }}>
+            <div className="panel">
+              <div className="panel-head">
+                <div>
+                  <h3>{poPanel.sku}</h3>
+                  <p>{poPanel.name} · {(poBySkuMap[poPanel.sku] || []).length} PO lines · {(poBySkuMap[poPanel.sku] || []).filter(p => p.pending > 0).length} open</p>
+                </div>
+                <button className="close-btn" onClick={() => setPoPanel(null)}>×</button>
+              </div>
+              <div className="pb">
+                <table className="po-tbl">
+                  <thead><tr><th>PO code</th><th>Vendor</th><th>PO date</th><th>Delivery date</th><th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th><th style={{ textAlign: 'right' }}>Pending</th><th>Progress</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {(poBySkuMap[poPanel.sku] || []).map((r, i) => {
+                      const pct = r.ordered > 0 ? Math.round((r.rcvd / r.ordered) * 100) : 0;
+                      return (
+                        <tr key={i}>
+                          <td><span className="po-code-pill">{r.po}</span></td>
+                          <td style={{ fontSize: 11, color: 'var(--text2)' }}>{r.vendor}</td>
+                          <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.poDate}</td>
+                          <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.delDate}</td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.ordered.toLocaleString()}</td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{r.rcvd.toLocaleString()}</td>
+                          <td style={{ textAlign: 'right' }}>{r.pending > 0 ? <span className="pending-red">{r.pending.toLocaleString()}</span> : r.pending}</td>
+                          <td><div className="pct-lbl">{pct}%</div><div className="prog-track"><div className="prog-fill" style={{ width: `${pct}%` }} /></div></td>
+                          <td><StatusPill status={r.status} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SKU PANEL */}
+        {skuPanel && (
+          <div className="panel-wrap open" style={{ marginBottom: '1.25rem' }}>
+            <div className="panel">
+              <div className="panel-head">
+                <div>
+                  <h3>{skuPanel.cat} · {skuPanel.bucketIdx === 5 ? 'Spikes' : BUCKETS[skuPanel.bucketIdx]?.label}</h3>
+                  <p>{skuPanelItems.length} sku{skuPanelItems.length !== 1 ? 's' : ''} · {skuPanelItems.filter(isSpike).length} spike{skuPanelItems.filter(isSpike).length !== 1 ? 's' : ''}</p>
+                </div>
+                <button className="close-btn" onClick={() => { setSkuPanel(null); setPoPanel(null); }}>×</button>
+              </div>
+              <div className="pb">
+                <table className="detail">
+                  <thead><tr>
+                    <th>Action</th><th>SKU</th><th>Item</th>
+                    <th className="r">7d DRR</th><th className="r">15d DRR</th><th className="r">30d DRR</th>
+                    <th className="r">DOC</th><th className="r">Inventory</th><th>Open POs</th>
+                  </tr></thead>
+                  <tbody>
+                    {skuPanelItems.map((r, i) => {
+                      const sp2 = isSpike(r);
+                      return (
+                        <tr key={i} className={r.doc < 15 ? 'critical-row' : sp2 ? 'spike-row' : ''}>
+                          <td><ActionBadge r={r} /></td>
+                          <td><span className="sku-code">{r.sku}</span></td>
+                          <td><span style={{ fontWeight: 500 }}>{r.name}</span>{sp2 && <span className="spike-tag"><i className="ti ti-flame" />spike</span>}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{r.drr7}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{r.drr15}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{r.drr30}</td>
+                          <td className="r"><DocBadge doc={r.doc} /></td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.inv.toLocaleString()}</td>
+                          <td><POCell r={r} poBySkuMap={poBySkuMap} onOpen={(sku, name) => setPoPanel({ sku, name })} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="panel-legend">
+                {[
+                  { cls: 'ab-procure-urgent', label: 'Procure now', note: 'DOC=0' },
+                  { cls: 'ab-procure',        label: 'Procure',     note: '1–15d' },
+                  { cls: 'ab-watch',          label: 'Watch',       note: '16–30d' },
+                  { cls: 'ab-healthy',        label: 'Healthy',     note: '31–60d' },
+                  { cls: 'ab-overstock',      label: 'Overstock',   note: '61–90d' },
+                  { cls: 'ab-liquidate',      label: 'Liquidate',   note: '91–180d' },
+                  { cls: 'ab-deadstock',      label: 'Dead stock',  note: '>180d'  },
+                ].map(a => (
+                  <span key={a.cls} className="pl-item">
+                    <span className={`badge ${a.cls}`} style={{ fontSize: 9, padding: '1px 6px' }}>{a.label}</span>{a.note}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── DOC TAB ── */}
+        {activeTab === 'doc' && (
+          <div className="card">
+            <div className="card-head">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span className="card-title"><i className="ti ti-layout-grid" style={{ fontSize: 15, color: 'var(--blue)' }} />Items by DOC range</span>
+                <span className="card-chip">{inv.length} skus</span>
+              </div>
+              <select className="filter-input" value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ minWidth: 150 }}>
+                <option value="">All categories</option>
+                {cats.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              {inv.length === 0
+                ? <div className="empty-state"><i className="ti ti-table-off" /><p>{loading ? 'Loading inventory from Uniware…' : 'No inventory data yet — click Refresh'}</p></div>
+                : (
+                  <table className="matrix">
+                    <thead><tr>
+                      <th className="cat-th">Category</th>
+                      <th>DOC &gt;90</th><th>DOC 60–90</th><th>DOC 30–60</th><th>DOC 15–30</th><th>DOC &lt;15</th>
+                      <th><i className="ti ti-flame" style={{ color: 'var(--amber-mid)', fontSize: 11 }} /> Spikes</th>
+                    </tr></thead>
+                    <tbody>
+                      {[...new Set(filteredInv.map(r => r.cat))].sort().map(cat => {
+                        const items      = filteredInv.filter(r => r.cat === cat);
+                        const spikeItems = items.filter(isSpike);
+                        return (
+                          <tr key={cat}>
+                            <td className="cat-lbl">{cat}</td>
+                            {BUCKETS.map((b, bi) => {
+                              const m = items.filter(r => {
+                                const d = r.doc;
+                                if (bi === 0) return d > 90;
+                                if (bi === 1) return d >= 61 && d <= 90;
+                                if (bi === 2) return d >= 31 && d <= 60;
+                                if (bi === 3) return d >= 16 && d <= 30;
+                                if (bi === 4) return d >= 0  && d <= 15;
+                                return false;
+                              });
+                              if (!m.length) return <td key={bi}><span className="doc-empty">—</span></td>;
+                              if (bi === 4) {
+                                const avg = Math.round(m.reduce((s, r) => s + r.doc, 0) / m.length);
+                                const bg  = docGradColor(avg);
+                                return <td key={bi}><span className="doc-cell" style={{ background: bg, color: avg < 5 ? '#FFE0E0' : '#3A0A0A', borderColor: bg }} onClick={() => { setPoPanel(null); setSkuPanel({ cat, bucketIdx: bi }); }}>{m.length}</span></td>;
+                              }
+                              return <td key={bi}><span className="doc-cell" onClick={() => { setPoPanel(null); setSkuPanel({ cat, bucketIdx: bi }); }}>{m.length}</span></td>;
+                            })}
+                            <td>
+                              {spikeItems.length
+                                ? <span className="spike-pill" onClick={() => { setPoPanel(null); setSkuPanel({ cat, bucketIdx: 5 }); }}><i className="ti ti-flame" style={{ fontSize: 11 }} />{spikeItems.length}</span>
+                                : <span className="spike-zero">—</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+            </div>
+            <div className="matrix-footer">
+              <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--text3)', marginRight: 4, textTransform: 'uppercase', letterSpacing: '.08em', fontFamily: 'var(--mono)' }}>DOC &lt;15 gradient:</span>
+              {[{ bg: '#8B1C1C', label: '0d stockout' }, { bg: '#C03030', label: '5d' }, { bg: '#E88080', label: '10d' }, { bg: '#F5C0C0', label: '14d' }].map(l => (
+                <span key={l.label} className="leg-item"><span className="leg-dot" style={{ background: l.bg }} />{l.label}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── PO TAB ── */}
+        {activeTab === 'po' && (
+          <div className="card">
+            <div className="card-head">
+              <span className="card-title"><i className="ti ti-clipboard-list" style={{ fontSize: 15, color: 'var(--blue)' }} />Open purchase orders</span>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <input className="filter-input" placeholder="Search SKU, vendor, PO…" value={poSearch} onChange={e => setPoSearch(e.target.value)} style={{ width: 185 }} />
+                <select className="filter-input" value={poStatusF} onChange={e => setPoStatusF(e.target.value)}>
+                  <option value="">All statuses</option>
+                  <option value="APPROVED">Approved</option>
+                  <option value="WAITING_FOR_APPROVAL">Pending approval</option>
+                  <option value="COMPLETE">Complete</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              {allPORows.length === 0
+                ? <div className="empty-state"><i className="ti ti-clipboard-off" /><p>{loading ? 'Loading POs from Uniware…' : 'No PO data — click Refresh'}</p></div>
+                : (
+                  <table className="po-tbl">
+                    <thead><tr><th>PO code</th><th>SKU</th><th>Item</th><th>Vendor</th><th>PO date</th><th>Delivery</th><th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th><th style={{ textAlign: 'right' }}>Pending</th><th>Progress</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {filteredPO.length === 0
+                        ? <tr><td colSpan={11} style={{ textAlign: 'center', padding: 24, color: 'var(--text3)', fontSize: 12, fontFamily: 'var(--mono)' }}>no matching records</td></tr>
+                        : filteredPO.map((r, i) => {
+                            const pct = r.ordered > 0 ? Math.round((r.rcvd / r.ordered) * 100) : 0;
+                            return (
+                              <tr key={i}>
+                                <td><span className="po-code-pill">{r.po}</span></td>
+                                <td><span className="sku-code">{r.sku}</span></td>
+                                <td style={{ fontSize: 11, color: 'var(--text3)', maxWidth: 140 }}>{invMap[r.sku] || r.itemName || '—'}</td>
+                                <td style={{ fontSize: 11, color: 'var(--text2)' }}>{r.vendor}</td>
+                                <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.poDate}</td>
+                                <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.delDate}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.ordered.toLocaleString()}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{r.rcvd.toLocaleString()}</td>
+                                <td style={{ textAlign: 'right' }}>{r.pending > 0 ? <span className="pending-red">{r.pending.toLocaleString()}</span> : r.pending}</td>
+                                <td><div className="pct-lbl">{pct}%</div><div className="prog-track"><div className="prog-fill" style={{ width: `${pct}%` }} /></div></td>
+                                <td><StatusPill status={r.status} /></td>
+                              </tr>
+                            );
+                          })}
+                    </tbody>
+                  </table>
+                )}
+            </div>
+          </div>
+        )}
+
+        {/* ── SPIKES TAB ── */}
+        {activeTab === 'spikes' && (
+          <div className="card">
+            <div className="card-head">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span className="card-title"><i className="ti ti-flame" style={{ fontSize: 15, color: 'var(--amber-mid)' }} />Sales spikes</span>
+                <span className="card-chip">7d DRR &gt; 15d &amp; 30d · ratio ≥ 1.5×</span>
+              </div>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              {inv.length === 0
+                ? <div className="empty-state"><i className="ti ti-flame-off" /><p>{loading ? 'Loading…' : 'No data — click Refresh'}</p></div>
+                : spikes.length === 0
+                  ? <div className="empty-state"><i className="ti ti-circle-check" style={{ color: 'var(--green)' }} /><p>No spikes detected</p></div>
+                  : (
+                    <table className="detail">
+                      <thead><tr>
+                        <th style={{ width: 34 }}>Pri</th><th>Action</th><th>SKU</th><th>Item</th><th>Category</th>
+                        <th className="r">7d DRR</th><th className="r">15d DRR</th><th className="r">30d DRR</th>
+                        <th className="r">Ratio</th><th className="r">DOC</th><th className="r">Inventory</th><th>Open POs</th>
+                      </tr></thead>
+                      <tbody>
+                        {spikes.map((r, i) => {
+                          const rBg  = r.ratio >= 3 ? 'var(--red-dim)' : r.ratio >= 2 ? 'var(--amber-dim)' : 'var(--green-dim)';
+                          const rClr = r.ratio >= 3 ? 'var(--red-mid)' : r.ratio >= 2 ? 'var(--amber-mid)' : 'var(--green)';
+                          return (
+                            <tr key={i} className={r.doc < 15 ? 'critical-row' : 'spike-row'}>
+                              <td><span className={`priority-ring pr-${r.priority}`}>{r.priority}</span></td>
+                              <td><ActionBadge r={r} /></td>
+                              <td><span className="sku-code">{r.sku}</span></td>
+                              <td><span style={{ fontWeight: 500 }}>{r.name}</span></td>
+                              <td><span className="badge" style={{ background: 'var(--bg3)', color: 'var(--text3)', border: '1px solid var(--border)', fontSize: 9 }}>{r.cat}</span></td>
+                              <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--amber-mid)' }}>{r.drr7}</td>
+                              <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{r.drr15}</td>
+                              <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{r.drr30}</td>
+                              <td className="r"><span className="ratio-badge" style={{ background: rBg, color: rClr }}>{r.ratio.toFixed(1)}×</span></td>
+                              <td className="r"><DocBadge doc={r.doc} /></td>
+                              <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.inv.toLocaleString()}</td>
+                              <td><POCell r={r} poBySkuMap={poBySkuMap} onOpen={(sku, name) => setPoPanel({ sku, name })} /></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+            </div>
+          </div>
+        )}
+
+        {/* ── GRN TAB ── */}
+        {activeTab === 'grn' && (
+          <div className="card">
+            <div className="card-head">
+              <span className="card-title"><i className="ti ti-package-import" style={{ fontSize: 15, color: 'var(--blue)' }} />GRN — last 30 days</span>
+              <span className="card-chip">{grnData.length} records</span>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              {grnData.length === 0
+                ? <div className="empty-state"><i className="ti ti-package-off" /><p>{loading ? 'Loading GRN from Uniware…' : 'No GRN data — click Refresh'}</p></div>
+                : (
+                  <table className="detail">
+                    <thead>
+                      <tr>{Object.keys(grnData[0] || {}).slice(0, 10).map(k => <th key={k}>{k}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {grnData.slice(0, 100).map((r, i) => (
+                        <tr key={i}>
+                          {Object.values(r).slice(0, 10).map((v, j) => <td key={j} style={{ fontSize: 11, fontFamily: 'var(--mono)' }}>{v}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* TOAST */}
+      {toast && <div className={`toast show ${toast.type}`}>{toast.msg}</div>}
+
+      <style jsx global>{`
+        *{box-sizing:border-box;margin:0;padding:0}
+        :root{
+          --bg:#F2EFE9;--bg2:#FAFAF7;--bg3:#F0EDE6;--bg4:#E8E4DC;
+          --border:#D8D3C8;--border2:#C8C2B4;
+          --text:#1E1C18;--text2:#5A5649;--text3:#9A9285;
+          --blue:#1A5FA5;--blue-dim:#D6E6F7;--blue-mid:#4A8FD4;
+          --green:#3B6D11;--green-dim:#DCF0C8;
+          --amber:#7A4A08;--amber-dim:#FAEEDA;--amber-mid:#C07820;
+          --red:#8B1C1C;--red-dim:#FCEAEA;--red-mid:#C03030;
+          --purple:#3C348A;--purple-dim:#E8E6F8;
+          --teal:#0F5E44;--teal-dim:#CFF0E4;
+          --mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif;
+        }
+        body{font-family:var(--sans);color:var(--text);font-size:13px;background:var(--bg);line-height:1.5}
+        .shell{padding:1.25rem 1.5rem 2rem;min-height:100vh}
+        .top-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:10px}
+        .brand{display:flex;align-items:center;gap:12px}
+        .brand-icon{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#1A5FA5,#4A8FD4);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 2px 8px rgba(26,95,165,.25)}
+        .brand-icon i{color:#fff;font-size:19px}
+        .brand-text h1{font-size:18px;font-weight:700;letter-spacing:-0.5px}
+        .brand-text p{font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:1px}
+        .top-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .time-chip{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--text2);background:var(--bg2);padding:6px 12px;border-radius:20px;border:1px solid var(--border)}
+        .live-dot{width:7px;height:7px;border-radius:50%;background:#ccc;flex-shrink:0}
+        .live-dot.fetching{background:var(--amber-mid);animation:pulse 1s infinite}
+        .live-dot.error{background:var(--red-mid)}
+        .live-dot.idle{background:#ccc}
+        .live-dot:not(.fetching):not(.error):not(.idle){background:#3B8A2A;box-shadow:0 0 5px rgba(59,138,42,.5)}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+        .btn-refresh{display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:1px solid var(--border2);background:var(--bg2);color:var(--text2);font-size:12px;font-family:var(--mono);font-weight:500;cursor:pointer;transition:all .15s}
+        .btn-refresh:hover{border-color:var(--blue-mid);color:var(--blue)}
+        .btn-refresh:disabled{opacity:.5;cursor:not-allowed}
+        .spin{animation:spin .8s linear infinite;display:inline-block}
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        .error-strip{display:flex;align-items:center;gap:8px;background:var(--amber-dim);border:1px solid rgba(192,120,32,.3);color:var(--amber);padding:8px 14px;border-radius:8px;font-size:11px;font-family:var(--mono);margin-bottom:1rem}
+        .skeleton-wrap{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:1.25rem}
+        .skeleton-card{height:90px;border-radius:12px;background:linear-gradient(90deg,var(--bg3) 25%,var(--bg4) 50%,var(--bg3) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite}
+        @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+        .metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:1.25rem}
+        @media(max-width:720px){.metrics{grid-template-columns:repeat(3,1fr)}}
+        .mc{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;position:relative;overflow:hidden}
+        .mc::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:12px 12px 0 0}
+        .mc.c-blue::after{background:var(--blue-mid)}.mc.c-green::after{background:#4A8A1A}
+        .mc.c-amber::after{background:var(--amber-mid)}.mc.c-red::after{background:var(--red-mid)}
+        .mc.c-teal::after{background:#1A8A62}.mc.c-purple::after{background:#6058C0}
+        .mc .lbl{font-size:9px;font-family:var(--mono);color:var(--text3);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.1em}
+        .mc .val{font-size:28px;font-weight:700;letter-spacing:-1px;line-height:1;font-family:var(--mono)}
+        .mc .sub{font-size:10px;color:var(--text3);margin-top:7px;font-family:var(--mono)}
+        .mc.c-blue .val{color:var(--blue)}.mc.c-green .val{color:var(--green)}
+        .mc.c-amber .val{color:var(--amber-mid)}.mc.c-red .val{color:var(--red-mid)}
+        .mc.c-teal .val{color:var(--teal)}.mc.c-purple .val{color:var(--purple)}
+        .tab-bar{display:flex;gap:4px;margin-bottom:1.25rem;background:var(--bg3);padding:4px;border-radius:10px;width:fit-content;border:1px solid var(--border)}
+        .tb{display:flex;align-items:center;gap:7px;padding:7px 16px;font-size:12px;font-family:var(--sans);border:none;border-radius:7px;cursor:pointer;background:none;color:var(--text3);font-weight:500;transition:all .15s}
+        .tb:hover{color:var(--text);background:var(--bg4)}
+        .tb.active{background:var(--bg2);color:var(--text);border:1px solid var(--border2);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+        .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:1.25rem;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+        .card-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px}
+        .card-title{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+        .card-chip{font-size:10px;padding:2px 8px;background:var(--bg3);color:var(--text3);border-radius:20px;font-weight:500;border:1px solid var(--border);font-family:var(--mono)}
+        .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3rem 2rem;gap:12px;text-align:center}
+        .empty-state i{font-size:32px;color:var(--text3)}
+        .empty-state p{font-size:12px;color:var(--text3);font-family:var(--mono)}
+        table.matrix{width:100%;border-collapse:collapse}
+        table.matrix th{padding:9px 14px;text-align:center;font-size:9px;font-weight:600;color:var(--text3);white-space:nowrap;background:var(--bg3);letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border)}
+        table.matrix th.cat-th{text-align:left;min-width:160px;padding-left:18px}
+        table.matrix td{padding:10px 14px;border-top:1px solid var(--border);text-align:center;vertical-align:middle}
+        table.matrix td.cat-lbl{text-align:left;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text2);padding-left:18px;font-family:var(--mono)}
+        table.matrix tbody tr:hover td{background:var(--bg3)}
+        .doc-cell{display:inline-flex;align-items:center;justify-content:center;min-width:36px;height:28px;padding:0 10px;border:1px solid var(--border2);border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg3);color:var(--text);font-family:var(--mono);transition:all .15s}
+        .doc-cell:hover{border-color:var(--blue-mid);color:var(--blue);background:var(--blue-dim)}
+        .doc-empty{color:var(--text3);font-size:13px;font-family:var(--mono)}
+        .spike-pill{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;background:var(--amber-dim);color:var(--amber);border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid rgba(192,120,32,.3);transition:all .15s;font-family:var(--mono)}
+        .spike-zero{color:var(--text3);font-size:13px;font-family:var(--mono)}
+        .matrix-footer{display:flex;gap:14px;flex-wrap:wrap;padding:9px 18px;background:var(--bg3);border-top:1px solid var(--border)}
+        .leg-item{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text3);font-family:var(--mono)}
+        .leg-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+        .panel-wrap{display:none;margin-bottom:1.25rem}.panel-wrap.open{display:block}
+        .panel{background:var(--bg2);border-radius:12px;border:1.5px solid var(--blue-mid);overflow:hidden;box-shadow:0 4px 20px rgba(26,95,165,.12)}
+        .panel-head{display:flex;align-items:flex-start;justify-content:space-between;padding:14px 18px 11px;border-bottom:1px solid var(--border)}
+        .panel-head h3{font-size:14px;font-weight:700;margin-bottom:3px}
+        .panel-head p{font-size:11px;color:var(--text3);font-family:var(--mono)}
+        .close-btn{background:var(--bg3);border:1px solid var(--border2);border-radius:7px;width:28px;height:28px;cursor:pointer;font-size:16px;line-height:27px;text-align:center;color:var(--text3);flex-shrink:0}
+        .pb{overflow-x:auto}
+        table.detail{width:100%;border-collapse:collapse;min-width:680px}
+        table.detail th{padding:8px 14px;text-align:left;font-size:9px;font-weight:600;color:var(--text3);background:var(--bg3);white-space:nowrap;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono)}
+        table.detail th.r{text-align:right}
+        table.detail td{padding:9px 14px;border-top:1px solid var(--border);font-size:12px;vertical-align:middle}
+        table.detail td.r{text-align:right}
+        table.detail tbody tr:hover td{background:var(--bg3)}
+        .sku-code{font-family:var(--mono);font-size:11px;color:var(--blue);font-weight:600;white-space:nowrap;background:var(--blue-dim);padding:2px 7px;border-radius:5px;border:1px solid rgba(26,95,165,.15)}
+        .spike-tag{display:inline-flex;align-items:center;gap:3px;font-size:9px;color:var(--amber);margin-left:6px;background:var(--amber-dim);padding:1px 6px;border-radius:20px;border:1px solid rgba(192,120,32,.3);font-family:var(--mono);font-weight:600;text-transform:uppercase}
+        .badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:600;white-space:nowrap;font-family:var(--mono);gap:3px}
+        .ab-procure-urgent{background:#8B1C1C;color:#FFD0D0;border:1px solid rgba(139,28,28,.5)}
+        .ab-procure{background:var(--red-dim);color:var(--red);border:1px solid rgba(192,48,48,.3)}
+        .ab-watch{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(192,120,32,.3)}
+        .ab-healthy{background:var(--green-dim);color:var(--green);border:1px solid rgba(59,109,17,.3)}
+        .ab-overstock{background:var(--blue-dim);color:var(--blue);border:1px solid rgba(26,95,165,.25)}
+        .ab-liquidate{background:var(--purple-dim);color:var(--purple);border:1px solid rgba(60,52,138,.25)}
+        .ab-deadstock{background:var(--bg3);color:var(--text3);border:1px solid var(--border2)}
+        .po-btn{font-size:10px;padding:4px 10px;border:1px solid rgba(26,95,165,.3);border-radius:20px;cursor:pointer;background:var(--blue-dim);color:var(--blue);font-family:var(--mono);font-weight:600;white-space:nowrap;transition:all .12s}
+        .po-btn-none{font-size:10px;padding:4px 10px;border:1px solid var(--border);border-radius:20px;cursor:pointer;background:none;color:var(--text3);font-family:var(--mono);font-weight:500;white-space:nowrap}
+        table.po-tbl{width:100%;border-collapse:collapse;min-width:700px}
+        table.po-tbl th{padding:8px 14px;text-align:left;font-size:9px;font-weight:600;color:var(--text3);background:var(--bg3);white-space:nowrap;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono)}
+        table.po-tbl td{padding:9px 14px;border-top:1px solid var(--border);font-size:12px;vertical-align:middle}
+        table.po-tbl tbody tr:hover td{background:var(--bg3)}
+        .po-code-pill{display:inline-block;padding:2px 8px;background:var(--blue-dim);color:var(--blue);border-radius:5px;font-size:10px;font-family:var(--mono);font-weight:600;border:1px solid rgba(26,95,165,.15)}
+        .pending-red{color:var(--red-mid);font-weight:700;font-family:var(--mono)}
+        .prog-track{width:64px;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden;margin-top:3px;border:1px solid var(--border)}
+        .prog-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--blue-mid),#5BA8F5)}
+        .pct-lbl{font-size:10px;color:var(--text3);font-family:var(--mono)}
+        .sp-wait{display:inline-flex;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:700;background:var(--amber-dim);color:var(--amber);border:1px solid rgba(192,120,32,.3);font-family:var(--mono);text-transform:uppercase}
+        .sp-appr{display:inline-flex;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:700;background:var(--blue-dim);color:var(--blue);border:1px solid rgba(26,95,165,.25);font-family:var(--mono);text-transform:uppercase}
+        .sp-comp{display:inline-flex;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:700;background:var(--green-dim);color:var(--green);border:1px solid rgba(59,109,17,.25);font-family:var(--mono);text-transform:uppercase}
+        .critical-row td{background:#FBEAEA!important}.critical-row:hover td{background:#F5D8D8!important}
+        .spike-row{background:#FFFBF2}.spike-row:hover td{background:#FFF3D0!important}
+        .priority-ring{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;font-size:10px;font-weight:700;flex-shrink:0;font-family:var(--mono)}
+        .pr-1{background:var(--red-dim);color:var(--red-mid);border:1.5px solid rgba(192,48,48,.4)}
+        .pr-2{background:var(--amber-dim);color:var(--amber);border:1.5px solid rgba(192,120,32,.4)}
+        .pr-3{background:var(--green-dim);color:var(--green);border:1.5px solid rgba(59,109,17,.4)}
+        .ratio-badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700;font-family:var(--mono)}
+        .panel-legend{display:flex;gap:12px;flex-wrap:wrap;padding:9px 18px;background:var(--bg3);border-top:1px solid var(--border)}
+        .pl-item{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text3);font-family:var(--mono)}
+        .filter-input{font-size:11px;padding:6px 11px;border:1px solid var(--border2);border-radius:7px;background:var(--bg2);color:var(--text);font-family:var(--mono);transition:border-color .12s;font-weight:500}
+        .filter-input:focus{outline:none;border-color:var(--blue-mid)}
+        .toast{position:fixed;bottom:24px;right:24px;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:10px 16px;font-size:12px;font-family:var(--mono);color:var(--text);display:flex;align-items:center;gap:8px;z-index:999;opacity:0;transform:translateY(8px);transition:all .25s;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,.12)}
+        .toast.show{opacity:1;transform:translateY(0)}
+        .toast.ok{border-color:rgba(59,109,17,.4);color:var(--green)}
+        .toast.err{border-color:rgba(192,48,48,.4);color:var(--red-mid)}
+        .toast.info{border-color:rgba(26,95,165,.4);color:var(--blue)}
+      `}</style>
+    </>
+  );
+}
