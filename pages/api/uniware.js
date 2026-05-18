@@ -11,7 +11,7 @@
  * GET /api/uniware?type=all         → { inventory, po, grn, fetchedAt }
  */
 
-import { fetchInventory, fetchPurchaseOrders, fetchGRN } from '../../lib/mcpClient';
+import { init, fetchInventory, fetchPurchaseOrders, fetchGRN } from '../../lib/mcpClient';
 
 export const config = {
   maxDuration: 60,   // Vercel Pro allows up to 300s; free tier 60s
@@ -31,6 +31,8 @@ export default async function handler(req, res) {
   const { type = 'all' } = req.query;
 
   try {
+    // Initialize MCP session once before any tool calls
+    await init();
     switch (type) {
 
       case 'inventory': {
