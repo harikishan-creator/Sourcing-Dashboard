@@ -22,6 +22,16 @@ export default async function handler(req, res) {
     // Step 1: Initialize MCP session — must happen before any tool calls
     await init();
 
+    // DEBUG: show raw response from create_export_job
+    if (type === 'debug') {
+      const { callToolRaw } = await import('../../lib/mcpClient');
+      const raw = await callToolRaw('create_export_job', {
+        exportJobTypeName: 'Inventory Snapshot',
+        facilityCode: process.env.MCP_FACILITY_CODE || 'MSKT_FZP',
+      });
+      return res.status(200).json({ raw });
+    }
+
     // Step 2: Fetch requested data
     if (type === 'inventory') {
       const inventory = await fetchInventory();
