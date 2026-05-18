@@ -31,8 +31,6 @@ export default async function handler(req, res) {
   const { type = 'all' } = req.query;
 
   try {
-    // Initialize MCP session once before any tool calls
-    await init();
     switch (type) {
 
       case 'inventory': {
