@@ -1,79 +1,59 @@
 /**
- * pages/api/uniware.js
+ * pages/api/uniware.js — Secure Vercel API proxy
  *
- * Secure server-side proxy for the Uniware MCP server.
- * The MCP_TOKEN env var is NEVER exposed to the browser.
+ * Flow per request:
+ *   1. init()  → POST initialize to MCP → captures mcp-session-id header
+ *   2. fetch*  → POST tools/call using that session ID
  *
- * GET /api/uniware?type=inventory   → INV array
- * GET /api/uniware?type=po          → PO_BY_SKU map
- * GET /api/uniware?type=drr         → DRR rows (CSV)
- * GET /api/uniware?type=grn         → GRN rows (CSV)
- * GET /api/uniware?type=all         → { inventory, po, grn, fetchedAt }
+ * MCP_TOKEN never reaches the browser.
  */
 
 import { init, fetchInventory, fetchPurchaseOrders, fetchGRN } from '../../lib/mcpClient';
 
-export const config = {
-  maxDuration: 60,   // Vercel Pro allows up to 300s; free tier 60s
-};
+export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
-  // Only allow GET
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  // Basic auth check — make sure MCP token is configured
-  if (!process.env.MCP_TOKEN) {
-    return res.status(500).json({ error: 'MCP_TOKEN not configured on server' });
-  }
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  if (!process.env.MCP_TOKEN) return res.status(500).json({ error: 'MCP_TOKEN not configured' });
 
   const { type = 'all' } = req.query;
 
   try {
-    switch (type) {
+    // Step 1: Initialize MCP session — must happen before any tool calls
+    await init();
 
-      case 'inventory': {
-        const inventory = await fetchInventory();
-        return res.status(200).json({ inventory, fetchedAt: new Date().toISOString() });
-      }
-
-      case 'po': {
-        const po = await fetchPurchaseOrders();
-        return res.status(200).json({ po, fetchedAt: new Date().toISOString() });
-      }
-
-      case 'grn': {
-        const grn = await fetchGRN();
-        return res.status(200).json({ grn, fetchedAt: new Date().toISOString() });
-      }
-
-      case 'all': {
-        // Fetch inventory + POs in parallel; GRN is supplementary
-        const [inventory, po, grn] = await Promise.allSettled([
-          fetchInventory(),
-          fetchPurchaseOrders(),
-          fetchGRN(),
-        ]);
-
-        return res.status(200).json({
-          inventory:  inventory.status  === 'fulfilled' ? inventory.value  : [],
-          po:         po.status         === 'fulfilled' ? po.value         : {},
-          grn:        grn.status        === 'fulfilled' ? grn.value        : [],
-          errors: {
-            inventory: inventory.status  === 'rejected' ? inventory.reason?.message  : null,
-            po:        po.status         === 'rejected' ? po.reason?.message         : null,
-            grn:       grn.status        === 'rejected' ? grn.reason?.message        : null,
-          },
-          fetchedAt: new Date().toISOString(),
-        });
-      }
-
-      default:
-        return res.status(400).json({ error: `Unknown type: ${type}` });
+    // Step 2: Fetch requested data
+    if (type === 'inventory') {
+      const inventory = await fetchInventory();
+      return res.status(200).json({ inventory, fetchedAt: new Date().toISOString() });
     }
+
+    if (type === 'po') {
+      const po = await fetchPurchaseOrders();
+      return res.status(200).json({ po, fetchedAt: new Date().toISOString() });
+    }
+
+    if (type === 'grn') {
+      const grn = await fetchGRN();
+      return res.status(200).json({ grn, fetchedAt: new Date().toISOString() });
+    }
+
+    // type=all — run sequentially so session stays valid
+    const result = { inventory: [], po: {}, grn: [], errors: {}, fetchedAt: new Date().toISOString() };
+
+    try { result.inventory = await fetchInventory(); }
+    catch (e) { result.errors.inventory = e.message; }
+
+    try { result.po = await fetchPurchaseOrders(); }
+    catch (e) { result.errors.po = e.message; }
+
+    try { result.grn = await fetchGRN(); }
+    catch (e) { result.errors.grn = e.message; }
+
+    return res.status(200).json(result);
+
   } catch (err) {
-    console.error('[/api/uniware] Error:', err);
-    return res.status(500).json({ error: err.message || 'Internal server error' });
+    console.error('[/api/uniware]', err);
+    return res.status(500).json({ error: err.message });
   }
 }
