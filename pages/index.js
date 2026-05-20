@@ -78,12 +78,83 @@ export default function Dashboard() {
   const [skuPanel,    setSkuPanel]    = useState(null);  // { cat, bucketIdx }
   const [poPanel,     setPoPanel]     = useState(null);  // { sku, name }
   const [toast,       setToast]       = useState(null);
+  const [dataSource,  setDataSource]  = useState('mcp');   // 'mcp' | 'csv'
+  const [invLoaded,   setInvLoaded]   = useState(false);
+  const [poLoaded,    setPoLoaded]    = useState(false);
 
   // ── toast ──
   const showToast = useCallback((msg, type = 'ok') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3500);
   }, []);
+
+  // ── CSV helpers ──
+  function parseCSV(text) {
+    const lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim().split('\n');
+    if (lines.length < 2) return [];
+    function parseLine(line) {
+      const vals=[]; let cur='',inQ=false,i=0;
+      while(i<line.length){const ch=line[i];if(ch==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i+=2;continue;}inQ=!inQ;}else if(ch===','&&!inQ){vals.push(cur);cur='';}else cur+=ch;i++;}
+      vals.push(cur); return vals;
+    }
+    const headers=parseLine(lines[0]).map(h=>h.trim());
+    return lines.slice(1).filter(l=>l.trim()).map(line=>{const vals=parseLine(line);const obj={};headers.forEach((h,i)=>{obj[h]=(vals[i]??'').trim();});return obj;});
+  }
+
+  function handleInvCSV(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const rows = parseCSV(e.target.result);
+        const skuMap = new Map();
+        rows.forEach(r => {
+          const sku = (r['Item SKU Code']||'').trim();
+          if (!sku) return;
+          skuMap.set(sku, {
+            sku, name:(r['Item Type Name']||sku).trim(), cat:(r['Category']||'Uncategorised').trim(),
+            drr7:num(r['Last 7 days DRR']), drr15:num(r['Last 15 days DRR']), drr30:num(r['Last 30 days DRR']),
+            drrMax:num(r['DRR Max']), inv:num(r['Inventory']), openPO:num(r['Open Purchase']), doc:num(r['Days of Cover']),
+          });
+        });
+        setInv(Array.from(skuMap.values()));
+        setInvLoaded(true); setDataSource('csv'); setStatus('ok');
+        showToast(`✓ ${skuMap.size} SKUs loaded from ${file.name}`, 'ok');
+      } catch(err) { showToast('CSV parse error: '+err.message,'err'); }
+    };
+    reader.readAsText(file);
+  }
+
+  function handlePOCSV(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const rows = parseCSV(e.target.result);
+        const bySkuMap = {};
+        rows.forEach(r => {
+          const sku = (r['item_skucode']||'').trim();
+          if (!sku) return;
+          if (!bySkuMap[sku]) bySkuMap[sku]=[];
+          bySkuMap[sku].push({
+            po:r['po_code']||'—', vendor:r['vendor_name']||'—',
+            poDate:r['created']?.split('T')[0]||'—', delDate:r['delivery_date']?.split('T')[0]||'—',
+            ordered:num(r['order_quantity']), rcvd:num(r['recieved_quantity']),
+            pending:num(r['pending_quantity']), status:(r['purchase_order_status']||'APPROVED').toUpperCase().replace(/ /g,'_'),
+            itemName:(r['item_type_name']||sku).trim(),
+          });
+        });
+        setPoBySkuMap(bySkuMap);
+        setPoLoaded(true); setDataSource('csv');
+        showToast(`✓ PO data loaded from ${file.name}`, 'ok');
+      } catch(err) { showToast('CSV parse error: '+err.message,'err'); }
+    };
+    reader.readAsText(file);
+  }
+
+  function clearCSV() {
+    setInv([]); setPoBySkuMap([]); setGrnData([]);
+    setInvLoaded(false); setPoLoaded(false); setDataSource('mcp'); setStatus('idle');
+    showToast('Data cleared','ok');
+  }
 
   // ── fetch from secure proxy ──
   const fetchAll = useCallback(async () => {
@@ -191,6 +262,40 @@ export default function Dashboard() {
                 {status === 'ok'      && fetchedAt && `Live · ${new Date(fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST`}
               </span>
             </div>
+          </div>
+        </div>
+
+        {/* CSV UPLOAD ZONE */}
+        <div className="upload-zone" style={{marginBottom:'1.25rem'}}>
+          <div className="upload-inner">
+            <div className="upload-left">
+              <div className="upload-icon"><i className="ti ti-upload" /></div>
+              <div className="upload-text">
+                <h3>Upload Unicommerce CSV exports <span style={{fontSize:10,fontWeight:400,color:'var(--text3)',marginLeft:6}}>(fallback while MCP is being fixed)</span></h3>
+                <p>Inventory reorder sheet + GRN / PO details export</p>
+              </div>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              <label className={`slot ${invLoaded?'loaded':''}`} style={{cursor:'pointer'}}>
+                <i className="ti ti-table" style={{fontSize:14,color:'var(--blue)'}} />
+                <span className="sl">Inventory CSV</span>
+                <span className="ss">{invLoaded?'✓ loaded':'click to upload'}</span>
+                <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleInvCSV(e.target.files[0])} />
+              </label>
+              <label className={`slot ${poLoaded?'loaded':''}`} style={{cursor:'pointer'}}>
+                <i className="ti ti-clipboard-list" style={{fontSize:14,color:'var(--amber-mid)'}} />
+                <span className="sl">PO / GRN CSV</span>
+                <span className="ss">{poLoaded?'✓ loaded':'click to upload'}</span>
+                <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>e.target.files[0]&&handlePOCSV(e.target.files[0])} />
+              </label>
+              <button className="clear-btn" onClick={clearCSV}><i className="ti ti-refresh" style={{fontSize:13}} />Clear</button>
+            </div>
+          </div>
+          <div className="upload-hint">
+            <span className="hl">Inventory cols:</span>
+            {['Item SKU Code','Item Type Name','Category','Last 7 days DRR','Last 15 days DRR','Last 30 days DRR','DRR Max','Inventory','Open Purchase','Days of Cover'].map(c=><span key={c} className="cc">{c}</span>)}
+            <span className="hl" style={{marginLeft:6}}>PO cols:</span>
+            {['po_code','item_skucode','vendor_name','created','delivery_date','order_quantity','recieved_quantity','pending_quantity','purchase_order_status'].map(c=><span key={c} className="cc">{c}</span>)}
           </div>
         </div>
 
@@ -570,6 +675,24 @@ export default function Dashboard() {
         .btn-refresh{display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:1px solid var(--border2);background:var(--bg2);color:var(--text2);font-size:12px;font-family:var(--mono);font-weight:500;cursor:pointer;transition:all .15s}
         .btn-refresh:hover{border-color:var(--blue-mid);color:var(--blue)}
         .btn-refresh:disabled{opacity:.5;cursor:not-allowed}
+        .upload-zone{background:var(--bg2);border:1.5px dashed var(--border2);border-radius:14px;padding:1.25rem 1.5rem}
+        .upload-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px}
+        .upload-left{display:flex;align-items:center;gap:12px}
+        .upload-icon{width:42px;height:42px;border-radius:10px;background:var(--blue-dim);border:1px solid rgba(26,95,165,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+        .upload-icon i{font-size:20px;color:var(--blue)}
+        .upload-text h3{font-size:13px;font-weight:600;margin-bottom:2px}
+        .upload-text p{font-size:11px;color:var(--text3);font-family:var(--mono)}
+        .slot{display:flex;align-items:center;gap:7px;padding:7px 12px;border-radius:8px;border:1px solid var(--border2);background:var(--bg3);font-size:11px;font-family:var(--mono);transition:all .15s}
+        .slot:hover{border-color:var(--blue-mid);background:var(--blue-dim)}
+        .slot .sl{font-weight:500;color:var(--text2)}
+        .slot .ss{font-size:10px;color:var(--text3);margin-left:2px}
+        .slot.loaded{border-color:var(--green);background:var(--green-dim)}
+        .slot.loaded .sl,.slot.loaded .ss{color:var(--green)}
+        .clear-btn{display:flex;align-items:center;gap:5px;padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:none;color:var(--text3);font-size:11px;font-family:var(--mono);cursor:pointer;transition:all .15s}
+        .clear-btn:hover{border-color:var(--red-mid);color:var(--red);background:var(--red-dim)}
+        .upload-hint{margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+        .hl{font-size:9px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;font-family:var(--mono)}
+        .cc{background:var(--blue-dim);border:1px solid rgba(26,95,165,.2);border-radius:4px;padding:1px 6px;font-size:10px;color:var(--blue);font-family:var(--mono)}
         .spin{animation:spin .8s linear infinite;display:inline-block}
         @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         .error-strip{display:flex;align-items:center;gap:8px;background:var(--amber-dim);border:1px solid rgba(192,120,32,.3);color:var(--amber);padding:8px 14px;border-radius:8px;font-size:11px;font-family:var(--mono);margin-bottom:1rem}
