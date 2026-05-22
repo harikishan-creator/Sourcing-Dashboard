@@ -131,20 +131,33 @@ export default function Dashboard() {
         const rows = parseCSV(e.target.result);
         const bySkuMap = {};
         rows.forEach(r => {
-          const sku = (r['item_skucode']||'').trim();
+          // Support both old format (item_skucode) and new Unicommerce export format (Item SkuCode)
+          const sku = (r['Item SkuCode'] || r['item_skucode'] || '').trim();
           if (!sku) return;
-          if (!bySkuMap[sku]) bySkuMap[sku]=[];
+          if (!bySkuMap[sku]) bySkuMap[sku] = [];
           bySkuMap[sku].push({
-            po:r['po_code']||'—', vendor:r['vendor_name']||'—',
-            poDate:r['created']?.split('T')[0]||'—', delDate:r['delivery_date']?.split('T')[0]||'—',
-            ordered:num(r['order_quantity']), rcvd:num(r['recieved_quantity']),
-            pending:num(r['pending_quantity']), status:(r['purchase_order_status']||'APPROVED').toUpperCase().replace(/ /g,'_'),
-            itemName:(r['item_type_name']||sku).trim(),
+            po:       (r['PO Code']   || r['po_code']   || '—').trim(),
+            vendor:   (r['Vendor Name'] || r['vendor_name'] || '—').trim(),
+            poDate:   (r['Created']   || r['created']   || '—').split(' ')[0],
+            delDate:  (r['Delivery Date'] || r['delivery_date'] || '—').split(' ')[0],
+            ordered:  num(r['Order Quantity']    || r['order_quantity']    || 0),
+            rcvd:     num(r['Recieved Quantity'] || r['recieved_quantity'] || 0),
+            rejected: num(r['Rejected Quantity'] || r['rejected_quantity'] || 0),
+            pending:  num(r['Pending Quantity']  || r['pending_quantity']  || 0),
+            ageing:   num(r['PO Ageing (Days)']  || 0),
+            pctPending: (r['% Pending'] || '0'),
+            unitPrice:num(r['Unit Price'] || 0),
+            total:    num(r['Total'] || 0),
+            status:   (r['Purchase Order Status'] || r['purchase_order_status'] || 'APPROVED').toUpperCase().replace(/ /g,'_'),
+            itemName: (r['Item Type Name'] || r['item_type_name'] || sku).trim(),
+            category: (r['Category'] || '').trim(),
+            facility: (r['Facility'] || '').trim(),
           });
         });
         setPoBySkuMap(bySkuMap);
+        const total = Object.values(bySkuMap).flat().length;
         setPoLoaded(true); setDataSource('csv');
-        showToast(`✓ PO data loaded from ${file.name}`, 'ok');
+        showToast(`✓ ${total} PO lines loaded from ${file.name}`, 'ok');
       } catch(err) { showToast('CSV parse error: '+err.message,'err'); }
     };
     reader.readAsText(file);
@@ -295,7 +308,7 @@ export default function Dashboard() {
             <span className="hl">Inventory cols:</span>
             {['Item SKU Code','Item Type Name','Category','Last 7 days DRR','Last 15 days DRR','Last 30 days DRR','DRR Max','Inventory','Open Purchase','Days of Cover'].map(c=><span key={c} className="cc">{c}</span>)}
             <span className="hl" style={{marginLeft:6}}>PO cols:</span>
-            {['po_code','item_skucode','vendor_name','created','delivery_date','order_quantity','recieved_quantity','pending_quantity','purchase_order_status'].map(c=><span key={c} className="cc">{c}</span>)}
+            {['PO Code','Item SkuCode','Item Type Name','Vendor Name','Created','Delivery Date','Order Quantity','Recieved Quantity','Rejected Quantity','Pending Quantity','Purchase Order Status','Unit Price','Total'].map(c=><span key={c} className="cc">{c}</span>)}
           </div>
         </div>
 
@@ -532,23 +545,28 @@ export default function Dashboard() {
                 ? <div className="empty-state"><i className="ti ti-clipboard-off" /><p>{loading ? 'Loading POs from Uniware…' : 'No PO data — click Refresh'}</p></div>
                 : (
                   <table className="po-tbl">
-                    <thead><tr><th>PO code</th><th>SKU</th><th>Item</th><th>Vendor</th><th>PO date</th><th>Delivery</th><th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th><th style={{ textAlign: 'right' }}>Pending</th><th>Progress</th><th>Status</th></tr></thead>
+                    <thead><tr><th>PO code</th><th>SKU</th><th>Item</th><th>Category</th><th>Vendor</th><th>PO date</th><th>Delivery</th><th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th><th style={{ textAlign: 'right' }}>Rejected</th><th style={{ textAlign: 'right' }}>Pending</th><th style={{ textAlign: 'right' }}>Unit Price</th><th style={{ textAlign: 'right' }}>Total</th><th>Ageing</th><th>Progress</th><th>Status</th></tr></thead>
                     <tbody>
                       {filteredPO.length === 0
-                        ? <tr><td colSpan={11} style={{ textAlign: 'center', padding: 24, color: 'var(--text3)', fontSize: 12, fontFamily: 'var(--mono)' }}>no matching records</td></tr>
+                        ? <tr><td colSpan={16} style={{ textAlign: 'center', padding: 24, color: 'var(--text3)', fontSize: 12, fontFamily: 'var(--mono)' }}>no matching records</td></tr>
                         : filteredPO.map((r, i) => {
                             const pct = r.ordered > 0 ? Math.round((r.rcvd / r.ordered) * 100) : 0;
                             return (
                               <tr key={i}>
                                 <td><span className="po-code-pill">{r.po}</span></td>
                                 <td><span className="sku-code">{r.sku}</span></td>
-                                <td style={{ fontSize: 11, color: 'var(--text3)', maxWidth: 140 }}>{invMap[r.sku] || r.itemName || '—'}</td>
+                                <td style={{ fontSize: 11, color: 'var(--text2)', maxWidth: 140 }}>{invMap[r.sku] || r.itemName || '—'}</td>
+                                <td style={{ fontSize: 11, color: 'var(--text3)' }}>{r.category || '—'}</td>
                                 <td style={{ fontSize: 11, color: 'var(--text2)' }}>{r.vendor}</td>
                                 <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.poDate}</td>
                                 <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.delDate}</td>
                                 <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.ordered.toLocaleString()}</td>
                                 <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{r.rcvd.toLocaleString()}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', color: r.rejected > 0 ? 'var(--amber-mid)' : 'var(--text3)' }}>{r.rejected?.toLocaleString() || 0}</td>
                                 <td style={{ textAlign: 'right' }}>{r.pending > 0 ? <span className="pending-red">{r.pending.toLocaleString()}</span> : r.pending}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>₹{r.unitPrice?.toLocaleString('en-IN') || '—'}</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600 }}>₹{r.total?.toLocaleString('en-IN') || '—'}</td>
+                                <td style={{ textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: r.ageing > 30 ? 'var(--red-mid)' : 'var(--text3)' }}>{r.ageing || '—'}d</td>
                                 <td><div className="pct-lbl">{pct}%</div><div className="prog-track"><div className="prog-fill" style={{ width: `${pct}%` }} /></div></td>
                                 <td><StatusPill status={r.status} /></td>
                               </tr>
