@@ -472,6 +472,8 @@ const SKU_WHITELIST = {
       const mergeMaps = (...maps) => {
         const merged = {};
         maps.forEach(m => Object.entries(m).forEach(([k,v]) => { merged[k] = (merged[k]||0)+v; }));
+        // Round after merge to eliminate float precision errors (e.g. 264.90000000000003)
+        Object.keys(merged).forEach(k => { merged[k] = Math.round(merged[k]); });
         return merged;
       };
 
@@ -604,6 +606,7 @@ const SKU_WHITELIST = {
       return false;
     });
     if (isSpikeBucket) skuPanelItems.sort((a, b) => spikePriority(a) - spikePriority(b));
+    else skuPanelItems.sort((a, b) => a.doc - b.doc); // ascending DOC
   }
 
   const invMap = Object.fromEntries(whitelistedInv.map(r => [r.sku, r.name]));
