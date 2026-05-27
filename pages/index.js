@@ -169,23 +169,186 @@ export default function Dashboard() {
     showToast('Data cleared','ok');
   }
 
-  // ── fetch from secure proxy ──
+  // ── fetch from secure proxy (multi-step for Vercel Hobby 10s limit) ──
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setStatus('loading');
-    showToast('Fetching live data from Uniware…', 'info');
-    try {
-      const res  = await fetch('/api/uniware?type=all');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Server error');
+    showToast('Starting data fetch from Uniware…', 'info');
 
-      setInv(data.inventory || []);
-      setPoBySkuMap(data.po || {});
-      setGrnData(data.grn || []);
-      setFetchedAt(data.fetchedAt);
-      setErrors(data.errors || {});
+    const FACILITIES = ['astrotalk', 'MSKT_FZP', 'Emiza_MMB', 'AT_global'];
+    const TYPES = ['inventory', 'drr7', 'drr15', 'drr30', 'po'];
+
+    try {
+      // Step 1: Trigger all jobs
+      showToast('Triggering export jobs…', 'info');
+      const jobs = []; // { type, facility, jobCode }
+
+      for (const facility of FACILITIES) {
+        for (const type of TYPES) {
+          try {
+            const res = await fetch('/api/uniware', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'trigger', type, facility }),
+            });
+            const data = await res.json();
+            if (data.jobCode) jobs.push({ type, facility, jobCode: data.jobCode });
+          } catch { /* skip failed job */ }
+        }
+      }
+
+      showToast(`✓ ${jobs.length} jobs triggered — polling…`, 'info');
+
+      // Step 2: Poll all jobs until done (max 20 polls each)
+      const urls = {}; // key: `${type}_${facility}` → csv url
+      const pending = [...jobs];
+
+      for (let attempt = 0; attempt < 25 && pending.length > 0; attempt++) {
+        await new Promise(r => setTimeout(r, 8000)); // wait 8s between polls
+        const stillPending = [];
+
+        for (const job of pending) {
+          try {
+            const res = await fetch('/api/uniware', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'poll', jobCode: job.jobCode, facility: job.facility }),
+            });
+            const data = await res.json();
+            if (data.status === 'DONE') {
+              urls[`${job.type}_${job.facility}`] = data.url;
+            } else if (data.status === 'RUNNING') {
+              stillPending.push(job);
+            }
+            // FAILED — skip silently
+          } catch { stillPending.push(job); }
+        }
+
+        pending.length = 0;
+        pending.push(...stillPending);
+        showToast(`Polling… ${Object.keys(urls).length}/${jobs.length} ready`, 'info');
+      }
+
+      showToast(`✓ Downloading CSVs…`, 'info');
+
+      // Step 3: Download all CSVs
+      const csvData = {}; // key → rows[]
+      for (const [key, url] of Object.entries(urls)) {
+        try {
+          const res = await fetch('/api/uniware', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'download', url }),
+          });
+          const data = await res.json();
+          if (data.rows) csvData[key] = data.rows;
+        } catch { /* skip */ }
+      }
+
+      // Step 4: Process and merge data
+      const normaliseCategory = (raw) => {
+        const s = (raw || '').trim().toLowerCase();
+        if (s === 'bracelets & pendants' || s === 'bracelets and pendants') return 'Bracelets and Pendants';
+        if (s === 'crystal' || s === 'crystals') return 'Crystals';
+        if (s === 'frame') return 'Frame';
+        if (s === 'murti') return 'Murti';
+        if (s === 'vastu') return 'Vastu';
+        return null;
+      };
+
+      const n = (v) => { const x = parseFloat(String(v||0).replace(/,/g,'')); return isNaN(x)?0:x; };
+
+      // Build DRR maps
+      const calcDRR = (rows, days) => {
+        const counts = {};
+        (rows||[]).forEach(r => {
+          const sku = (r['Item SKU Code']||r['Item SkuCode']||'').trim();
+          if (sku) counts[sku] = (counts[sku]||0) + 1;
+        });
+        const drr = {};
+        Object.entries(counts).forEach(([sku,total]) => { drr[sku] = Math.round((total/days)*10)/10; });
+        return drr;
+      };
+
+      const mergeMaps = (...maps) => {
+        const merged = {};
+        maps.forEach(m => Object.entries(m).forEach(([k,v]) => { merged[k] = (merged[k]||0)+v; }));
+        return merged;
+      };
+
+      const drr7Maps  = FACILITIES.map(f => calcDRR(csvData[`drr7_${f}`],  7));
+      const drr15Maps = FACILITIES.map(f => calcDRR(csvData[`drr15_${f}`], 15));
+      const drr30Maps = FACILITIES.map(f => calcDRR(csvData[`drr30_${f}`], 30));
+      const drr7Map   = mergeMaps(...drr7Maps);
+      const drr15Map  = mergeMaps(...drr15Maps);
+      const drr30Map  = mergeMaps(...drr30Maps);
+
+      // Build inventory map across facilities
+      const skuMap = new Map();
+      FACILITIES.forEach(fac => {
+        (csvData[`inventory_${fac}`]||[]).forEach(r => {
+          const sku = (r['Item SkuCode']||r['Item SKU Code']||'').trim();
+          if (!sku) return;
+          const cat = normaliseCategory(r['Category Name']||r['Category']||'');
+          if (!cat) return;
+          const inv = n(r['Inventory']||0);
+          if (skuMap.has(sku)) {
+            const e = skuMap.get(sku);
+            e.inv += inv;
+            e.invBlocked += n(r['Inventory Blocked']||0);
+            e.openPO     += n(r['Open Purchase']||0);
+            e.openSale   += n(r['Open Sale']||0);
+          } else {
+            skuMap.set(sku, {
+              sku, name:(r['Item Type Name']||sku).trim(), cat,
+              inv, invBlocked:n(r['Inventory Blocked']||0),
+              openPO:n(r['Open Purchase']||0), openSale:n(r['Open Sale']||0),
+              drr7:0, drr15:0, drr30:0, drrMax:0, doc:0,
+            });
+          }
+        });
+      });
+
+      // Attach DRR and calculate DOC
+      skuMap.forEach((item, sku) => {
+        const drr7  = drr7Map[sku]  || 0;
+        const drr15 = drr15Map[sku] || 0;
+        const drr30 = drr30Map[sku] || 0;
+        const drrMax = Math.max(drr7, drr15, drr30);
+        const doc = drrMax > 0 ? Math.round(item.inv / drrMax) : (item.inv > 0 ? 999 : 0);
+        item.drr7=drr7; item.drr15=drr15; item.drr30=drr30; item.drrMax=drrMax; item.doc=doc;
+      });
+
+      const inventory = Array.from(skuMap.values());
+
+      // Build PO map
+      const PO_BY_SKU = {};
+      FACILITIES.forEach(fac => {
+        (csvData[`po_${fac}`]||[]).forEach(r => {
+          const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
+          if (!sku) return;
+          if (!PO_BY_SKU[sku]) PO_BY_SKU[sku] = [];
+          PO_BY_SKU[sku].push({
+            po:(r['PO Code']||'—').trim(), vendor:(r['Vendor Name']||'—').trim(),
+            poDate:(r['Created']||'—').split(' ')[0], delDate:(r['Delivery Date']||'—').split(' ')[0],
+            ordered:n(r['Order Quantity']||0), rcvd:n(r['Recieved Quantity']||0),
+            rejected:n(r['Rejected Quantity']||0), pending:n(r['Pending Quantity']||0),
+            ageing:n(r['PO Ageing (Days)']||0), unitPrice:n(r['Unit Price']||0),
+            total:n(r['Total']||0),
+            status:(r['Purchase Order Status']||'COMPLETE').toUpperCase().replace(/ /g,'_'),
+            itemName:(r['Item Type Name']||sku).trim(), facility:fac,
+          });
+        });
+      });
+
+      setInv(inventory);
+      setPoBySkuMap(PO_BY_SKU);
+      setGrnData([]);
+      setFetchedAt(new Date().toISOString());
+      setErrors({});
       setStatus('ok');
-      showToast(`✓ Data refreshed — ${(data.inventory || []).length} SKUs loaded`, 'ok');
+      showToast(`✓ ${inventory.length} SKUs loaded across 4 facilities`, 'ok');
+
     } catch (err) {
       setStatus('error');
       showToast('Fetch failed: ' + err.message, 'err');
@@ -194,8 +357,8 @@ export default function Dashboard() {
     }
   }, [showToast]);
 
-  // Auto-fetch on mount
-  useEffect(() => { fetchAll(); }, []);
+  // Auto-fetch disabled — click 'Refresh from Uniware' manually when MCP token is ready
+  // useEffect(() => { fetchAll(); }, []);
 
   // ── derived data ──
   const cats        = [...new Set(inv.map(r => r.cat))].sort();
@@ -269,9 +432,9 @@ export default function Dashboard() {
             <div className="time-chip">
               <span className={`live-dot ${status === 'loading' ? 'fetching' : status === 'error' ? 'error' : status === 'ok' ? '' : 'idle'}`} />
               <span>
-                {status === 'idle'    && 'Initialising…'}
+                {status === 'idle'    && 'Upload CSV or click Refresh from Uniware'}
                 {status === 'loading' && 'Fetching live data…'}
-                {status === 'error'   && 'Fetch error — check console'}
+                {status === 'error'   && 'MCP unavailable — use CSV upload'}
                 {status === 'ok'      && fetchedAt && `Live · ${new Date(fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST`}
               </span>
             </div>
@@ -312,8 +475,8 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ERROR STRIP */}
-        {Object.values(errors).some(Boolean) && (
+        {/* ERROR STRIP — only show if no CSV data loaded */}
+        {Object.values(errors).some(Boolean) && inv.length === 0 && (
           <div className="error-strip">
             <i className="ti ti-alert-triangle" style={{ fontSize: 14 }} />
             <span>Partial data: {Object.entries(errors).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>
