@@ -1,17 +1,11 @@
 /**
  * pages/api/uniware.js — Secure Vercel API proxy
- *
- * Flow per request:
- *   1. init()  → POST initialize → captures mcp-session-id header
- *   2. fetch*  → POST tools/call using that session ID
- *
- * MCP_TOKEN (= MCP_SECRET on server) never reaches the browser.
- * The MCP server authenticates to Unicommerce via its own UC_USERNAME/UC_PASSWORD.
+ * Increased timeout to 300s (Pro) since we run 4 parallel export jobs
  */
 
-import { init, fetchInventory, fetchPurchaseOrdersExport, fetchGRN } from '../../lib/mcpClient';
+import { init, fetchInventory, fetchPurchaseOrders, fetchGRN } from '../../lib/mcpClient';
 
-export const config = { maxDuration: 60 };
+export const config = { maxDuration: 300 }; // Vercel Pro: up to 300s
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -20,25 +14,22 @@ export default async function handler(req, res) {
   const { type = 'all' } = req.query;
 
   try {
-    // Step 1: Initialize MCP session — must happen before any tool calls
-    await init();
+    await init(); // initialize MCP session once
 
     if (type === 'inventory') {
       const inventory = await fetchInventory();
       return res.status(200).json({ inventory, fetchedAt: new Date().toISOString() });
     }
-
     if (type === 'po') {
-      const po = await fetchPurchaseOrdersExport();
+      const po = await fetchPurchaseOrders();
       return res.status(200).json({ po, fetchedAt: new Date().toISOString() });
     }
-
     if (type === 'grn') {
       const grn = await fetchGRN();
       return res.status(200).json({ grn, fetchedAt: new Date().toISOString() });
     }
 
-    // type=all — sequential so session stays valid
+    // type=all — inventory (with DRR) first, then PO and GRN
     const result = {
       inventory: [], po: {}, grn: [],
       errors: {}, fetchedAt: new Date().toISOString(),
@@ -47,7 +38,7 @@ export default async function handler(req, res) {
     try { result.inventory = await fetchInventory(); }
     catch (e) { result.errors.inventory = e.message; }
 
-    try { result.po = await fetchPurchaseOrdersExport(); }
+    try { result.po = await fetchPurchaseOrders(); }
     catch (e) { result.errors.po = e.message; }
 
     try { result.grn = await fetchGRN(); }
