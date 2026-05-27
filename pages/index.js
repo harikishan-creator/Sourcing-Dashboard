@@ -515,7 +515,7 @@ const SKU_WHITELIST = {
         const drr30 = drr30Map[sku] || 0;
         const drrMax = Math.max(drr7, drr15, drr30);
         const doc = drrMax > 0 ? Math.round(item.inv / drrMax) : (item.inv > 0 ? 999 : 0);
-        item.drr7=drr7; item.drr15=drr15; item.drr30=drr30; item.drrMax=drrMax; item.doc=doc;
+        item.drr7=Math.round(drr7); item.drr15=Math.round(drr15); item.drr30=Math.round(drr30); item.drrMax=Math.round(drrMax); item.doc=doc;
       });
 
       const inventory = Array.from(skuMap.values());
