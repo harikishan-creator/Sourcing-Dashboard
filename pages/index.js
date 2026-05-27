@@ -1,7 +1,8 @@
 import Head from 'next/head';
 import { useState, useEffect, useCallback } from 'react';
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ─────────────────────────────────────────────────────────────────
+function rnd(v) { return Math.round(v || 0); } // safe round for display──
 function num(v) { const n = parseFloat(String(v || 0).replace(/,/g, '')); return isNaN(n) ? 0 : n; }
 function fmtDate(d) { return d ? String(d).split('T')[0] : '—'; }
 
@@ -116,7 +117,13 @@ export default function Dashboard() {
             drrMax:Math.round(num(r['DRR Max'])), inv:num(r['Inventory']), openPO:num(r['Open Purchase']), doc:Math.round(num(r['Days of Cover'])),
           });
         });
-        setInv(Array.from(skuMap.values()));
+        setInv(Array.from(skuMap.values()).map(r => ({
+          ...r,
+          drr7:   Math.round(r.drr7   || 0),
+          drr15:  Math.round(r.drr15  || 0),
+          drr30:  Math.round(r.drr30  || 0),
+          drrMax: Math.round(r.drrMax || 0),
+        })));
         setInvLoaded(true); setDataSource('csv'); setStatus('ok');
         showToast(`✓ ${skuMap.size} SKUs loaded from ${file.name}`, 'ok');
       } catch(err) { showToast('CSV parse error: '+err.message,'err'); }
@@ -542,7 +549,13 @@ const SKU_WHITELIST = {
         });
       });
 
-      setInv(inventory);
+      setInv(inventory.map(r => ({
+        ...r,
+        drr7:   Math.round(r.drr7   || 0),
+        drr15:  Math.round(r.drr15  || 0),
+        drr30:  Math.round(r.drr30  || 0),
+        drrMax: Math.round(r.drrMax || 0),
+      })));
       setPoBySkuMap(PO_BY_SKU);
       setGrnData([]);
       setFetchedAt(new Date().toISOString());
