@@ -369,24 +369,21 @@ export default function Dashboard() {
   // Auto-fetch disabled — click 'Refresh from Uniware' manually when MCP token is ready
   // useEffect(() => { fetchAll(); }, []);
 
-  // ── derived data ──
-  const cats        = [...new Set(whitelistedInv.map(r => r.cat))].sort();
-  // Always filter to master SKU whitelist
-  const whitelistedInv = inv.filter(r => SKU_CAT_MAP[r.sku]);
-  const filteredInv = catFilter ? whitelistedInv.filter(r => r.cat === catFilter) : whitelistedInv;
-  const spikes      = whitelistedInv.filter(isSpike).map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) })).sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
-
-  // Metrics
-  const pn  = whitelistedInv.filter(r => r.doc === 0 && r.inv === 0).length;
-  const pc  = whitelistedInv.filter(r => r.doc > 0 && r.doc <= 15).length;
-  const ovs = whitelistedInv.filter(r => r.doc > 60 && r.doc <= 180).length;
-  const ds  = whitelistedInv.filter(r => r.doc > 180).length;
-  const sp  = spikes.length;
-  const ol  = Object.values(poBySkuMap).flat().filter(p => p.pending > 0).length;
+  // ── derived data (all in one block to prevent bundler reordering TDZ) ──
+  var whitelistedInv = inv.filter(r => SKU_CAT_MAP[r.sku]);
+  var cats        = [...new Set(whitelistedInv.map(r => r.cat))].sort();
+  var filteredInv = catFilter ? whitelistedInv.filter(r => r.cat === catFilter) : whitelistedInv;
+  var spikes      = whitelistedInv.filter(isSpike).map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) })).sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
+  var pn  = whitelistedInv.filter(r => r.doc === 0 && r.inv === 0).length;
+  var pc  = whitelistedInv.filter(r => r.doc > 0 && r.doc <= 15).length;
+  var ovs = whitelistedInv.filter(r => r.doc > 60 && r.doc <= 180).length;
+  var ds  = whitelistedInv.filter(r => r.doc > 180).length;
+  var sp  = spikes.length;
+  var ol  = Object.values(poBySkuMap).flat().filter(p => p.pending > 0).length;
 
   // PO tab rows
-  const allPORows = Object.entries(poBySkuMap).flatMap(([sku, pos]) => pos.map(p => ({ ...p, sku })));
-  const filteredPO = allPORows
+  var allPORows = Object.entries(poBySkuMap).flatMap(([sku, pos]) => pos.map(p => ({ ...p, sku })));
+  var filteredPO = allPORows
     .filter(r => {
       const q = poSearch.toLowerCase();
       return (!q || r.sku.toLowerCase().includes(q) || r.vendor.toLowerCase().includes(q) || (r.po || '').toLowerCase().includes(q))
@@ -395,7 +392,7 @@ export default function Dashboard() {
     .sort((a, b) => { const ord = { WAITING_FOR_APPROVAL: 0, APPROVED: 1, COMPLETE: 2 }; return (ord[a.status] || 1) - (ord[b.status] || 1) || b.pending - a.pending; });
 
   // SKU panel items
-  let skuPanelItems = [];
+  var skuPanelItems = [];
   if (skuPanel) {
     const { cat, bucketIdx } = skuPanel;
     const isSpikeBucket = bucketIdx === 5;
@@ -414,7 +411,7 @@ export default function Dashboard() {
     else skuPanelItems.sort((a, b) => a.doc - b.doc); // ascending DOC
   }
 
-  const invMap = Object.fromEntries(whitelistedInv.map(r => [r.sku, r.name]));
+  var invMap = Object.fromEntries(whitelistedInv.map(r => [r.sku, r.name]));
 
   // ── render ────────────────────────────────────────────────────────────────
   return (
