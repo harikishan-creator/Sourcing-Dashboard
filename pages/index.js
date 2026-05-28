@@ -25,6 +25,7 @@ function getAction(r) {
   return               { label: 'Dead stock', cls: 'ab-deadstock'  };
 }
 
+function rnd(v) { return Math.round(v || 0); } // safe round helper
 function isSpike(r) { return r.drr7 > 0 && r.drr30 > 0 && (r.drr7 / r.drr30) >= 1.5; }
 function spikePriority(r) { const rt = r.drr7 / r.drr30; return (rt >= 3 || r.doc < 15) ? 1 : rt >= 2 ? 2 : 3; }
 
@@ -353,7 +354,7 @@ export default function Dashboard() {
         const drr30  = Math.round(drr30Map[sku] || 0);
         const drrMax = Math.max(drr7, drr15, drr30);
         const doc    = drrMax > 0 ? Math.round(item.inv / drrMax) : (item.inv > 0 ? 999 : 0);
-        item.drr7=drr7; item.drr15=drr15; item.drr30=drr30; item.drrMax=drrMax; item.doc=doc;
+        item.drr7=rnd(drr7); item.drr15=rnd(drr15); item.drr30=rnd(drr30); item.drrMax=rnd(drrMax); item.doc=doc;
       });
 
       const inventory = Array.from(skuMap.values());
@@ -625,9 +626,9 @@ export default function Dashboard() {
                           <td><ActionBadge r={r} /></td>
                           <td><span className="sku-code">{r.sku}</span></td>
                           <td><span style={{ fontWeight: 500 }}>{r.name}</span>{sp2 && <span className="spike-tag"><i className="ti ti-flame" />spike</span>}</td>
-                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{Math.round(r.drr7)}</td>
-                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{Math.round(r.drr15)}</td>
-                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{Math.round(r.drr30)}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{rnd(r.drr7)}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr15)}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr30)}</td>
                           <td className="r"><DocBadge doc={r.doc} /></td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.inv.toLocaleString()}</td>
                           <td><POCell r={r} poBySkuMap={poBySkuMap} onOpen={(sku, name) => setPoPanel({ sku, name })} /></td>
@@ -811,9 +812,9 @@ export default function Dashboard() {
                               <td><span className="sku-code">{r.sku}</span></td>
                               <td><span style={{ fontWeight: 500 }}>{r.name}</span></td>
                               <td><span className="badge" style={{ background: 'var(--bg3)', color: 'var(--text3)', border: '1px solid var(--border)', fontSize: 9 }}>{r.cat}</span></td>
-                              <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--amber-mid)' }}>{Math.round(r.drr7)}</td>
-                              <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{Math.round(r.drr15)}</td>
-                              <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{Math.round(r.drr30)}</td>
+                              <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--amber-mid)' }}>{rnd(r.drr7)}</td>
+                              <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{rnd(r.drr15)}</td>
+                              <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{rnd(r.drr30)}</td>
                               <td className="r"><span className="ratio-badge" style={{ background: rBg, color: rClr }}>{r.ratio.toFixed(1)}×</span></td>
                               <td className="r"><DocBadge doc={r.doc} /></td>
                               <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.inv.toLocaleString()}</td>
