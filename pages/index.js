@@ -179,98 +179,95 @@ export default function Dashboard() {
     showToast('Data cleared','ok');
   }
 
-  // ── Smart fetch with caching ──
-  // Full fetch (30d DRR + inventory + PO): once per day
-  // Delta fetch (48h DRR only): subsequent refreshes same day
+  // ── Fetch with client-side 24h cache ──
   const fetchAll = useCallback(async (forceFullFetch = false) => {
     setLoading(true);
     setStatus('loading');
 
     const FACILITIES = ['astrotalk', 'MSKT_FZP', 'Emiza_MMB', 'AT_global'];
+    const CACHE_KEY = 'dashboard_cache_v1';
+    const FULL_FETCH_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-    // ── Helper: trigger + poll + download one job ──
-    const runJob = async (type, facility) => {
-      try {
-        const trigRes = await fetch('/api/uniware', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'trigger', type, facility }),
-        });
-        const { jobCode, error: trigErr } = await trigRes.json();
-        if (trigErr || !jobCode) return null;
-
-        // Poll until done (max 25 × 8s = 200s)
-        for (let i = 0; i < 25; i++) {
-          await new Promise(r => setTimeout(r, 8000));
-          const pollRes = await fetch('/api/uniware', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'poll', jobCode, facility }),
-          });
-          const pollData = await pollRes.json();
-          if (pollData.status === 'DONE') {
-            const dlRes = await fetch('/api/uniware', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'download', url: pollData.url }),
-            });
-            const { rows } = await dlRes.json();
-            return rows || [];
-          }
-          if (pollData.status === 'FAILED') return null;
-        }
-        return null;
-      } catch { return null; }
-    };
-
-    // ── Check if full fetch needed ──
+    // Check if full fetch needed (>24h since last)
     let needFull = forceFullFetch;
     if (!needFull) {
       try {
-        const infoRes = await fetch('/api/uniware');
-        const info = await infoRes.json();
-        needFull = info.needFullFetch;
+        const cached = sessionStorage.getItem(CACHE_KEY);
+        if (cached) {
+          const { ts } = JSON.parse(cached);
+          needFull = (Date.now() - ts) >= FULL_FETCH_MS;
+        } else {
+          needFull = true;
+        }
       } catch { needFull = true; }
     }
 
-    showToast(needFull ? '📦 Full fetch (daily)…' : '⚡ Delta fetch (48h update)…', 'info');
+    showToast(needFull ? '📦 Full fetch (30d DRR)…' : '⚡ Delta fetch (48h)…', 'info');
+
+    // Helper: trigger → poll → download one job
+    const runJob = async (type, facility) => {
+      try {
+        const t = await fetch('/api/uniware', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'trigger', type, facility }),
+        });
+        const { jobCode, error: e } = await t.json();
+        if (e || !jobCode) return [];
+        for (let i = 0; i < 25; i++) {
+          await new Promise(r => setTimeout(r, 8000));
+          const p = await fetch('/api/uniware', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'poll', jobCode, facility }),
+          });
+          const pd = await p.json();
+          if (pd.status === 'DONE') {
+            const d = await fetch('/api/uniware', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'download', url: pd.url }),
+            });
+            const { rows } = await d.json();
+            return rows || [];
+          }
+          if (pd.status === 'FAILED') return [];
+        }
+      } catch {}
+      return [];
+    };
 
     try {
-      // ── STEP 1: Always fetch inventory snapshots (fast, no date filter) ──
+      // Step 1: Always get inventory snapshots
       showToast('Fetching inventory…', 'info');
       const invData = {};
+      for (const fac of FACILITIES) invData[fac] = await runJob('inventory', fac);
+
+      // Step 2: DRR - full (7d+15d+30d) or delta (48h)
+      showToast(needFull ? 'Fetching 7d/15d/30d sales…' : 'Fetching 48h delta…', 'info');
+      const drr7Data = {}, drr15Data = {}, drr30Data = {};
       for (const fac of FACILITIES) {
-        invData[fac] = await runJob('inventory', fac) || [];
-      }
-
-      // ── STEP 2: DRR — full (30d) once/day, delta (48h) otherwise ──
-      const drrType7  = 'drr7';
-      const drrType15 = needFull ? 'drr15' : null;
-      const drrType30 = needFull ? 'drr30' : null;
-      const drrTypeDelta = needFull ? null : 'drr48h';
-
-      showToast(needFull ? 'Fetching 7d/15d/30d DRR…' : 'Fetching 48h delta DRR…', 'info');
-
-      const drr7Data = {}, drr15Data = {}, drr30Data = {}, drrDeltaData = {};
-
-      for (const fac of FACILITIES) {
-        drr7Data[fac]    = await runJob('drr7', fac) || [];
+        drr7Data[fac] = await runJob('drr7', fac);
         if (needFull) {
-          drr15Data[fac] = await runJob('drr15', fac) || [];
-          drr30Data[fac] = await runJob('drr30', fac) || [];
-        } else {
-          drrDeltaData[fac] = await runJob('drr48h', fac) || [];
+          drr15Data[fac] = await runJob('drr15', fac);
+          drr30Data[fac] = await runJob('drr30', fac);
         }
       }
 
-      // ── STEP 3: PO — full fetch or use cache ──
+      // Step 3: PO - full fetch or from cache
       let poBySkuMapNew = {};
+      let cachedPO = {};
+      try {
+        const cached = sessionStorage.getItem(CACHE_KEY);
+        if (cached) cachedPO = JSON.parse(cached).po || {};
+      } catch {}
+
       if (needFull) {
         showToast('Fetching POs…', 'info');
         for (const fac of FACILITIES) {
-          const rows = await runJob('po', fac) || [];
+          const rows = await runJob('po', fac);
           rows.forEach(r => {
             const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
             if (!sku) return;
             if (!poBySkuMapNew[sku]) poBySkuMapNew[sku] = [];
-            const n = (v) => { const x = parseFloat(String(v||0).replace(/,/g,'')); return isNaN(x)?0:x; };
+            const n = v => { const x = parseFloat(String(v||0).replace(/,/g,'')); return isNaN(x)?0:x; };
             poBySkuMapNew[sku].push({
               po:(r['PO Code']||'—').trim(), vendor:(r['Vendor Name']||'—').trim(),
               poDate:(r['Created']||'—').split(' ')[0], delDate:(r['Delivery Date']||'—').split(' ')[0],
@@ -284,64 +281,50 @@ export default function Dashboard() {
           });
         }
       } else {
-        // Load cached PO data
-        try {
-          const cacheRes = await fetch('/api/uniware', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'get_cache' }),
-          });
-          const cache = await cacheRes.json();
-          if (cache.po) poBySkuMapNew = cache.po;
-        } catch {}
+        poBySkuMapNew = cachedPO;
       }
 
-      // ── STEP 4: Process inventory + DRR ──
-      const normaliseCategory = (sku) => SKU_CAT_MAP[sku] || null;
-      const n = (v) => { const x = parseFloat(String(v||0).replace(/,/g,'')); return isNaN(x)?0:x; };
-
+      // Step 4: Calculate DRR & DOC
       const calcDRR = (rows, days) => {
-        const counts = {};
+        const c = {};
         (rows||[]).forEach(r => {
-          const sku = (r['Item SKU Code']||r['Item SkuCode']||'').trim();
-          if (sku) counts[sku] = (counts[sku]||0) + 1;
+          const s = (r['Item SKU Code']||r['Item SkuCode']||'').trim();
+          if (s) c[s] = (c[s]||0) + 1;
         });
-        const drr = {};
-        Object.entries(counts).forEach(([sku,total]) => { drr[sku] = Math.round(total/days); });
-        return drr;
+        const d = {};
+        Object.entries(c).forEach(([s,t]) => { d[s] = rnd(t/days); });
+        return d;
+      };
+      const merge = (...maps) => {
+        const m = {};
+        maps.forEach(mp => Object.entries(mp||{}).forEach(([k,v]) => { m[k]=(m[k]||0)+v; }));
+        Object.keys(m).forEach(k => { m[k] = rnd(m[k]); });
+        return m;
       };
 
-      const mergeMaps = (...maps) => {
-        const merged = {};
-        maps.forEach(m => Object.entries(m||{}).forEach(([k,v]) => { merged[k] = (merged[k]||0)+v; }));
-        Object.keys(merged).forEach(k => { merged[k] = Math.round(merged[k]); });
-        return merged;
-      };
-
-      const drr7Map  = mergeMaps(...FACILITIES.map(f => calcDRR(drr7Data[f],   7)));
+      const drr7Map  = merge(...FACILITIES.map(f => calcDRR(drr7Data[f], 7)));
       const drr15Map = needFull
-        ? mergeMaps(...FACILITIES.map(f => calcDRR(drr15Data[f], 15)))
-        : mergeMaps(...FACILITIES.map(f => calcDRR(drrDeltaData[f], 2)));  // 48h / 2 days
+        ? merge(...FACILITIES.map(f => calcDRR(drr15Data[f], 15)))
+        : merge(...FACILITIES.map(f => calcDRR(drr7Data[f], 2)));
       const drr30Map = needFull
-        ? mergeMaps(...FACILITIES.map(f => calcDRR(drr30Data[f], 30)))
-        : drr15Map; // reuse delta if not full fetch
+        ? merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 30)))
+        : drr15Map;
 
       const skuMap = new Map();
       FACILITIES.forEach(fac => {
         (invData[fac]||[]).forEach(r => {
           const sku = (r['Item SkuCode']||r['Item SKU Code']||'').trim();
-          if (!sku) return;
-          const cat = normaliseCategory(sku);
-          if (!cat) return;
-          const inv = n(r['Inventory']||0);
+          if (!sku || !SKU_CAT_MAP[sku]) return;
+          const inv = parseFloat(r['Inventory']||0);
           if (skuMap.has(sku)) {
             const e = skuMap.get(sku);
-            e.inv     += inv;
-            e.openPO  += n(r['Open Purchase']||0);
-            e.openSale+= n(r['Open Sale']||0);
+            e.inv += inv;
+            e.openPO += parseFloat(r['Open Purchase']||0);
           } else {
             skuMap.set(sku, {
-              sku, name:(r['Item Type Name']||sku).trim(), cat,
-              inv, openPO:n(r['Open Purchase']||0), openSale:n(r['Open Sale']||0),
+              sku, name:(r['Item Type Name']||sku).trim(),
+              cat: SKU_CAT_MAP[sku], inv,
+              openPO:parseFloat(r['Open Purchase']||0),
               drr7:0, drr15:0, drr30:0, drrMax:0, doc:0,
             });
           }
@@ -349,23 +332,18 @@ export default function Dashboard() {
       });
 
       skuMap.forEach((item, sku) => {
-        const drr7   = Math.round(drr7Map[sku]  || 0);
-        const drr15  = Math.round(drr15Map[sku] || 0);
-        const drr30  = Math.round(drr30Map[sku] || 0);
-        const drrMax = Math.max(drr7, drr15, drr30);
-        const doc    = drrMax > 0 ? Math.round(item.inv / drrMax) : (item.inv > 0 ? 999 : 0);
-        item.drr7=rnd(drr7); item.drr15=rnd(drr15); item.drr30=rnd(drr30); item.drrMax=rnd(drrMax); item.doc=doc;
+        const d7=rnd(drr7Map[sku]||0), d15=rnd(drr15Map[sku]||0), d30=rnd(drr30Map[sku]||0);
+        const dMax = Math.max(d7, d15, d30);
+        item.drr7=d7; item.drr15=d15; item.drr30=d30; item.drrMax=dMax;
+        item.doc = dMax>0 ? rnd(item.inv/dMax) : (item.inv>0 ? 999 : 0);
       });
 
       const inventory = Array.from(skuMap.values());
 
-      // ── STEP 5: Save cache if full fetch ──
+      // Save to sessionStorage
       if (needFull) {
         try {
-          await fetch('/api/uniware', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'save_cache', inventory, po: poBySkuMapNew }),
-          });
+          sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), po: poBySkuMapNew }));
         } catch {}
       }
 
@@ -375,7 +353,7 @@ export default function Dashboard() {
       setFetchedAt(new Date().toISOString());
       setErrors({});
       setStatus('ok');
-      showToast(`✓ ${inventory.length} SKUs loaded (${needFull ? 'full' : 'delta'} fetch)`, 'ok');
+      showToast(`✓ ${inventory.length} SKUs loaded (${needFull?'full':'delta'})`, 'ok');
 
     } catch (err) {
       setStatus('error');
