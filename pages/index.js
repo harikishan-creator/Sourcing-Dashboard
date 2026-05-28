@@ -25,7 +25,6 @@ function getAction(r) {
   return               { label: 'Dead stock', cls: 'ab-deadstock'  };
 }
 
-function rnd(v) { return Math.round(v || 0); } // safe round helper
 function isSpike(r) { return r.drr7 > 0 && r.drr30 > 0 && (r.drr7 / r.drr30) >= 1.5; }
 function spikePriority(r) { const rt = r.drr7 / r.drr30; return (rt >= 3 || r.doc < 15) ? 1 : rt >= 2 ? 2 : 3; }
 
