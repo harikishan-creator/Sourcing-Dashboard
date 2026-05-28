@@ -176,295 +176,128 @@ export default function Dashboard() {
     showToast('Data cleared','ok');
   }
 
-  // ── fetch from secure proxy (multi-step for Vercel Hobby 10s limit) ──
-  const fetchAll = useCallback(async () => {
+  // ── Smart fetch with caching ──
+  // Full fetch (30d DRR + inventory + PO): once per day
+  // Delta fetch (48h DRR only): subsequent refreshes same day
+  const fetchAll = useCallback(async (forceFullFetch = false) => {
     setLoading(true);
     setStatus('loading');
-    showToast('Starting data fetch from Uniware…', 'info');
 
     const FACILITIES = ['astrotalk', 'MSKT_FZP', 'Emiza_MMB', 'AT_global'];
-    const TYPES = ['inventory', 'drr7', 'drr15', 'drr30', 'po'];
+
+    // ── Helper: trigger + poll + download one job ──
+    const runJob = async (type, facility) => {
+      try {
+        const trigRes = await fetch('/api/uniware', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'trigger', type, facility }),
+        });
+        const { jobCode, error: trigErr } = await trigRes.json();
+        if (trigErr || !jobCode) return null;
+
+        // Poll until done (max 25 × 8s = 200s)
+        for (let i = 0; i < 25; i++) {
+          await new Promise(r => setTimeout(r, 8000));
+          const pollRes = await fetch('/api/uniware', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'poll', jobCode, facility }),
+          });
+          const pollData = await pollRes.json();
+          if (pollData.status === 'DONE') {
+            const dlRes = await fetch('/api/uniware', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'download', url: pollData.url }),
+            });
+            const { rows } = await dlRes.json();
+            return rows || [];
+          }
+          if (pollData.status === 'FAILED') return null;
+        }
+        return null;
+      } catch { return null; }
+    };
+
+    // ── Check if full fetch needed ──
+    let needFull = forceFullFetch;
+    if (!needFull) {
+      try {
+        const infoRes = await fetch('/api/uniware');
+        const info = await infoRes.json();
+        needFull = info.needFullFetch;
+      } catch { needFull = true; }
+    }
+
+    showToast(needFull ? '📦 Full fetch (daily)…' : '⚡ Delta fetch (48h update)…', 'info');
 
     try {
-      // Step 1: Trigger all jobs
-      showToast('Triggering export jobs…', 'info');
-      const jobs = []; // { type, facility, jobCode }
+      // ── STEP 1: Always fetch inventory snapshots (fast, no date filter) ──
+      showToast('Fetching inventory…', 'info');
+      const invData = {};
+      for (const fac of FACILITIES) {
+        invData[fac] = await runJob('inventory', fac) || [];
+      }
 
-      for (const facility of FACILITIES) {
-        for (const type of TYPES) {
-          try {
-            const res = await fetch('/api/uniware', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'trigger', type, facility }),
-            });
-            const data = await res.json();
-            if (data.jobCode) jobs.push({ type, facility, jobCode: data.jobCode });
-          } catch { /* skip failed job */ }
+      // ── STEP 2: DRR — full (30d) once/day, delta (48h) otherwise ──
+      const drrType7  = 'drr7';
+      const drrType15 = needFull ? 'drr15' : null;
+      const drrType30 = needFull ? 'drr30' : null;
+      const drrTypeDelta = needFull ? null : 'drr48h';
+
+      showToast(needFull ? 'Fetching 7d/15d/30d DRR…' : 'Fetching 48h delta DRR…', 'info');
+
+      const drr7Data = {}, drr15Data = {}, drr30Data = {}, drrDeltaData = {};
+
+      for (const fac of FACILITIES) {
+        drr7Data[fac]    = await runJob('drr7', fac) || [];
+        if (needFull) {
+          drr15Data[fac] = await runJob('drr15', fac) || [];
+          drr30Data[fac] = await runJob('drr30', fac) || [];
+        } else {
+          drrDeltaData[fac] = await runJob('drr48h', fac) || [];
         }
       }
 
-      showToast(`✓ ${jobs.length} jobs triggered — polling…`, 'info');
-
-      // Step 2: Poll all jobs until done (max 20 polls each)
-      const urls = {}; // key: `${type}_${facility}` → csv url
-      const pending = [...jobs];
-
-      for (let attempt = 0; attempt < 25 && pending.length > 0; attempt++) {
-        await new Promise(r => setTimeout(r, 8000)); // wait 8s between polls
-        const stillPending = [];
-
-        for (const job of pending) {
-          try {
-            const res = await fetch('/api/uniware', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'poll', jobCode: job.jobCode, facility: job.facility }),
+      // ── STEP 3: PO — full fetch or use cache ──
+      let poBySkuMapNew = {};
+      if (needFull) {
+        showToast('Fetching POs…', 'info');
+        for (const fac of FACILITIES) {
+          const rows = await runJob('po', fac) || [];
+          rows.forEach(r => {
+            const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
+            if (!sku) return;
+            if (!poBySkuMapNew[sku]) poBySkuMapNew[sku] = [];
+            const n = (v) => { const x = parseFloat(String(v||0).replace(/,/g,'')); return isNaN(x)?0:x; };
+            poBySkuMapNew[sku].push({
+              po:(r['PO Code']||'—').trim(), vendor:(r['Vendor Name']||'—').trim(),
+              poDate:(r['Created']||'—').split(' ')[0], delDate:(r['Delivery Date']||'—').split(' ')[0],
+              ordered:n(r['Order Quantity']), rcvd:n(r['Recieved Quantity']),
+              rejected:n(r['Rejected Quantity']), pending:n(r['Pending Quantity']),
+              ageing:n(r['PO Ageing (Days)']), unitPrice:n(r['Unit Price']),
+              total:n(r['Total']),
+              status:(r['Purchase Order Status']||'COMPLETE').toUpperCase().replace(/ /g,'_'),
+              itemName:(r['Item Type Name']||sku).trim(), facility: fac,
             });
-            const data = await res.json();
-            if (data.status === 'DONE') {
-              urls[`${job.type}_${job.facility}`] = data.url;
-            } else if (data.status === 'RUNNING') {
-              stillPending.push(job);
-            }
-            // FAILED — skip silently
-          } catch { stillPending.push(job); }
-        }
-
-        pending.length = 0;
-        pending.push(...stillPending);
-        showToast(`Polling… ${Object.keys(urls).length}/${jobs.length} ready`, 'info');
-      }
-
-      showToast(`✓ Downloading CSVs…`, 'info');
-
-      // Step 3: Download all CSVs
-      const csvData = {}; // key → rows[]
-      for (const [key, url] of Object.entries(urls)) {
-        try {
-          const res = await fetch('/api/uniware', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'download', url }),
           });
-          const data = await res.json();
-          if (data.rows) csvData[key] = data.rows;
-        } catch { /* skip */ }
+        }
+      } else {
+        // Load cached PO data
+        try {
+          const cacheRes = await fetch('/api/uniware', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'get_cache' }),
+          });
+          const cache = await cacheRes.json();
+          if (cache.po) poBySkuMapNew = cache.po;
+        } catch {}
       }
 
-      // Step 4: Process and merge data
-const SKU_WHITELIST = {
-  "BP_0012":"Bracelets and Pendants",
-  "BP_0035":"Bracelets and Pendants",
-  "BP_0037":"Bracelets and Pendants",
-  "BP_0039":"Bracelets and Pendants",
-  "BP_0040":"Bracelets and Pendants",
-  "BP_0044":"Bracelets and Pendants",
-  "BP_0045":"Bracelets and Pendants",
-  "BP_0054":"Bracelets and Pendants",
-  "BP_0055":"Bracelets and Pendants",
-  "BP_0056":"Bracelets and Pendants",
-  "BP_0060":"Bracelets and Pendants",
-  "BP_0068":"Bracelets and Pendants",
-  "BP_0074":"Bracelets and Pendants",
-  "BP_0077":"Bracelets and Pendants",
-  "BP_0084":"Bracelets and Pendants",
-  "BP_0086":"Bracelets and Pendants",
-  "BP_0095":"Bracelets and Pendants",
-  "BP_0205":"Bracelets and Pendants",
-  "BP_0309":"Bracelets and Pendants",
-  "BP_0323":"Bracelets and Pendants",
-  "BP_0324":"Bracelets and Pendants",
-  "BP_0360":"Bracelets and Pendants",
-  "BP_0372":"Bracelets and Pendants",
-  "BP_0374":"Bracelets and Pendants",
-  "BP_0375":"Bracelets and Pendants",
-  "BP_0386":"Bracelets and Pendants",
-  "BP_0388":"Bracelets and Pendants",
-  "BP_0389":"Bracelets and Pendants",
-  "BP_0390":"Bracelets and Pendants",
-  "BP_0391":"Bracelets and Pendants",
-  "BP_0395":"Bracelets and Pendants",
-  "BP_0398":"Bracelets and Pendants",
-  "BP_0399":"Bracelets and Pendants",
-  "BP_0400":"Bracelets and Pendants",
-  "BP_0401":"Bracelets and Pendants",
-  "BP_0402":"Bracelets and Pendants",
-  "BP_0403":"Bracelets and Pendants",
-  "BP_0404":"Bracelets and Pendants",
-  "BP_0405":"Bracelets and Pendants",
-  "BP_0406":"Bracelets and Pendants",
-  "BP_0407":"Bracelets and Pendants",
-  "BP_0408":"Bracelets and Pendants",
-  "BP_0409":"Bracelets and Pendants",
-  "BP_0411":"Crystal",
-  "BP_0412":"Bracelets and Pendants",
-  "BP_0413":"Bracelets and Pendants",
-  "BP_0414":"Bracelets and Pendants",
-  "BP_0415":"Bracelets and Pendants",
-  "BP_0416":"Bracelets and Pendants",
-  "BP_0417":"Bracelets and Pendants",
-  "BP_0418":"Bracelets and Pendants",
-  "BP_0420":"Bracelets and Pendants",
-  "BP_0421":"Bracelets and Pendants",
-  "BP_0422":"Bracelets and Pendants",
-  "BP_0425":"Bracelets and Pendants",
-  "BP_0426":"Bracelets and Pendants",
-  "BP_0427":"Bracelets and Pendants",
-  "BP_0428":"Bracelets and Pendants",
-  "BP_0429":"Bracelets and Pendants",
-  "BP_0430":"Bracelets and Pendants",
-  "BP_0431":"Bracelets and Pendants",
-  "BP_0432":"Bracelets and Pendants",
-  "BP_0433":"Bracelets and Pendants",
-  "BP_0434":"Bracelets and Pendants",
-  "BP_0435":"Bracelets and Pendants",
-  "BP_0436":"Bracelets and Pendants",
-  "BP_0437":"Bracelets and Pendants",
-  "BP_0438":"Bracelets and Pendants",
-  "BP_0439":"Bracelets and Pendants",
-  "BP_0440":"Bracelets and Pendants",
-  "BP_0441":"Bracelets and Pendants",
-  "BP_0442":"Bracelets and Pendants",
-  "BP_0443":"Bracelets and Pendants",
-  "BP_0444":"Bracelets and Pendants",
-  "BP_0445":"Bracelets and Pendants",
-  "BP_0446":"Bracelets and Pendants",
-  "BP_0447":"Bracelets and Pendants",
-  "BP_0448":"Bracelets and Pendants",
-  "BP_0449":"Bracelets and Pendants",
-  "BP_0450":"Bracelets and Pendants",
-  "BP_0451":"Bracelets and Pendants",
-  "BP_0452":"Bracelets and Pendants",
-  "BP_0453":"Bracelets and Pendants",
-  "BP_0454":"Bracelets and Pendants",
-  "BP_0456":"Bracelets and Pendants",
-  "BP_0457":"Bracelets and Pendants",
-  "BP_0458":"Bracelets and Pendants",
-  "BP_0459":"Bracelets and Pendants",
-  "BP_0460":"Bracelets and Pendants",
-  "BP_0461":"Bracelets and Pendants",
-  "BP_0462":"Bracelets and Pendants",
-  "BP_0463":"Bracelets and Pendants",
-  "BP_0464":"Bracelets and Pendants",
-  "BP_0465":"Bracelets and Pendants",
-  "BP_0466":"Bracelets and Pendants",
-  "BP_0467":"Bracelets and Pendants",
-  "BP_0468":"Bracelets and Pendants",
-  "BP_0469":"Bracelets and Pendants",
-  "BP_0470":"Bracelets and Pendants",
-  "BP_2001":"Bracelets and Pendants",
-  "BP_2002":"Bracelets and Pendants",
-  "BP_2003":"Bracelets and Pendants",
-  "BP_2004":"Bracelets and Pendants",
-  "CRY_0148":"Crystal",
-  "CRY_0149":"Crystal",
-  "CRY_0150":"Crystal",
-  "CRY_0153":"Crystal",
-  "CRY_0156":"Crystal",
-  "CRY_0157":"Crystal",
-  "CRY_0158":"Crystal",
-  "CRY_0160":"Crystal",
-  "CRY_0161":"Crystal",
-  "CRY_0168":"Crystal",
-  "CRY_0169":"Crystal",
-  "CRY_0170":"Crystal",
-  "CRY_0171":"Crystal",
-  "CRY_0172":"Crystal",
-  "CRY_0184":"Crystal",
-  "CRY_0185":"Crystal",
-  "CRY_0186":"Crystal",
-  "CRY_0187":"Crystal",
-  "CRY_0188":"Crystal",
-  "CRY_0204":"Crystal",
-  "CRY_0205":"Crystal",
-  "CRY_0206":"Crystal",
-  "CRY_0207":"Crystal",
-  "CRY_0221":"Crystal",
-  "CRY_0222":"Crystal",
-  "CRY_0223":"Crystal",
-  "CRY_0232":"Crystal",
-  "CRY_0233":"Crystal",
-  "CRY_0234":"Crystal",
-  "CRY_0235":"Crystal",
-  "CRY_0236":"Crystal",
-  "CRY_0238":"Crystal",
-  "CRY_0239":"Crystal",
-  "CRY_0241":"Crystal",
-  "CRY_0243":"Crystal",
-  "CRY_0245":"Crystal",
-  "CRY_213":"Crystal",
-  "CRY_214":"Crystal",
-  "F_0012":"Frame",
-  "F_0013":"Frame",
-  "F_0015":"Frame",
-  "F_0021":"Frame",
-  "F_0024":"Frame",
-  "F_0025":"Frame",
-  "F_0026":"Frame",
-  "F_0027":"Frame",
-  "F_0028":"Frame",
-  "F_0030":"Frame",
-  "F_1007":"Frame",
-  "M_1003":"Murti",
-  "M_1008":"Murti",
-  "M_1017":"Murti",
-  "M_1026":"Murti",
-  "M_1030":"Murti",
-  "M_1032":"Murti",
-  "M_1033":"Murti",
-  "M_1035":"Murti",
-  "M_1036":"Murti",
-  "M_1037":"Murti",
-  "M_1040":"Murti",
-  "RD_0122_01":"Rudraksha",
-  "RD_0122_03":"Rudraksha",
-  "RD_0122_04":"Rudraksha",
-  "RD_0122_05":"Rudraksha",
-  "RD_0122_06":"Rudraksha",
-  "RD_0122_07":"Rudraksha",
-  "RD_0122_GM":"Rudraksha",
-  "RD_0123_5":"Rudraksha",
-  "RD_0123_5_05":"Rudraksha",
-  "RD_0123_5_07":"Rudraksha",
-  "RD_0123_7":"Rudraksha",
-  "RD_0126":"Rudraksha",
-  "RD_0128":"Rudraksha",
-  "RD_0144_07":"Rudraksha",
-  "RD_0144_SHP":"Rudraksha",
-  "RD_0144_SP":"Rudraksha",
-  "SEL_0001":"Selenite",
-  "SEL_0004":"Selenite",
-  "VST_1002":"Vastu",
-  "VST_1003":"Vastu",
-  "VST_1004":"Vastu",
-  "VST_1005":"Vastu",
-  "VST_1006":"Vastu",
-  "VST_1007":"Vastu",
-  "VST_1008":"Vastu",
-  "VST_1009":"Vastu",
-  "VST_1013":"Vastu",
-  "WH_2001":"Wall Hanging",
-  "WJ_0001":"Womens Jewellery",
-  "WJ_0002":"Womens Jewellery",
-  "WJ_0003":"Womens Jewellery",
-  "WJ_0004":"Womens Jewellery",
-  "WJ_0005":"Womens Jewellery",
-  "WJ_0006":"Womens Jewellery",
-  "WJ_0007":"Womens Jewellery",
-  "WJ_0009":"Womens Jewellery",
-  "WJ_0010":"Womens Jewellery",
-};
-
-      // Category lookup: use exact SKU whitelist from master sheet
-      const normaliseCategory = (sku, rawCat) => {
-        if (SKU_WHITELIST[sku]) return SKU_WHITELIST[sku];
-        return null; // not in whitelist — skip
+      // ── STEP 4: Process inventory + DRR ──
+      const normaliseCategory = (sku) => {
+        return MASTER_SKU_WHITELIST[sku] || null;
       };
-
       const n = (v) => { const x = parseFloat(String(v||0).replace(/,/g,'')); return isNaN(x)?0:x; };
 
-      // Build DRR maps
       const calcDRR = (rows, days) => {
         const counts = {};
         (rows||[]).forEach(r => {
@@ -478,90 +311,70 @@ const SKU_WHITELIST = {
 
       const mergeMaps = (...maps) => {
         const merged = {};
-        maps.forEach(m => Object.entries(m).forEach(([k,v]) => { merged[k] = (merged[k]||0)+v; }));
-        // Round after merge to eliminate float precision errors (e.g. 264.90000000000003)
+        maps.forEach(m => Object.entries(m||{}).forEach(([k,v]) => { merged[k] = (merged[k]||0)+v; }));
         Object.keys(merged).forEach(k => { merged[k] = Math.round(merged[k]); });
         return merged;
       };
 
-      const drr7Maps  = FACILITIES.map(f => calcDRR(csvData[`drr7_${f}`],  7));
-      const drr15Maps = FACILITIES.map(f => calcDRR(csvData[`drr15_${f}`], 15));
-      const drr30Maps = FACILITIES.map(f => calcDRR(csvData[`drr30_${f}`], 30));
-      const drr7Map   = mergeMaps(...drr7Maps);
-      const drr15Map  = mergeMaps(...drr15Maps);
-      const drr30Map  = mergeMaps(...drr30Maps);
+      const drr7Map  = mergeMaps(...FACILITIES.map(f => calcDRR(drr7Data[f],   7)));
+      const drr15Map = needFull
+        ? mergeMaps(...FACILITIES.map(f => calcDRR(drr15Data[f], 15)))
+        : mergeMaps(...FACILITIES.map(f => calcDRR(drrDeltaData[f], 2)));  // 48h / 2 days
+      const drr30Map = needFull
+        ? mergeMaps(...FACILITIES.map(f => calcDRR(drr30Data[f], 30)))
+        : drr15Map; // reuse delta if not full fetch
 
-      // Build inventory map across facilities
       const skuMap = new Map();
       FACILITIES.forEach(fac => {
-        (csvData[`inventory_${fac}`]||[]).forEach(r => {
+        (invData[fac]||[]).forEach(r => {
           const sku = (r['Item SkuCode']||r['Item SKU Code']||'').trim();
           if (!sku) return;
-          const cat = normaliseCategory(sku, r['Category Name']||r['Category']||'');
+          const cat = normaliseCategory(sku);
           if (!cat) return;
           const inv = n(r['Inventory']||0);
           if (skuMap.has(sku)) {
             const e = skuMap.get(sku);
-            e.inv += inv;
-            e.invBlocked += n(r['Inventory Blocked']||0);
-            e.openPO     += n(r['Open Purchase']||0);
-            e.openSale   += n(r['Open Sale']||0);
+            e.inv     += inv;
+            e.openPO  += n(r['Open Purchase']||0);
+            e.openSale+= n(r['Open Sale']||0);
           } else {
             skuMap.set(sku, {
               sku, name:(r['Item Type Name']||sku).trim(), cat,
-              inv, invBlocked:n(r['Inventory Blocked']||0),
-              openPO:n(r['Open Purchase']||0), openSale:n(r['Open Sale']||0),
+              inv, openPO:n(r['Open Purchase']||0), openSale:n(r['Open Sale']||0),
               drr7:0, drr15:0, drr30:0, drrMax:0, doc:0,
             });
           }
         });
       });
 
-      // Attach DRR and calculate DOC
       skuMap.forEach((item, sku) => {
-        const drr7  = drr7Map[sku]  || 0;
-        const drr15 = drr15Map[sku] || 0;
-        const drr30 = drr30Map[sku] || 0;
+        const drr7   = Math.round(drr7Map[sku]  || 0);
+        const drr15  = Math.round(drr15Map[sku] || 0);
+        const drr30  = Math.round(drr30Map[sku] || 0);
         const drrMax = Math.max(drr7, drr15, drr30);
-        const doc = drrMax > 0 ? Math.round(item.inv / drrMax) : (item.inv > 0 ? 999 : 0);
-        item.drr7=Math.round(drr7); item.drr15=Math.round(drr15); item.drr30=Math.round(drr30); item.drrMax=Math.round(drrMax); item.doc=doc;
+        const doc    = drrMax > 0 ? Math.round(item.inv / drrMax) : (item.inv > 0 ? 999 : 0);
+        item.drr7=drr7; item.drr15=drr15; item.drr30=drr30; item.drrMax=drrMax; item.doc=doc;
       });
 
       const inventory = Array.from(skuMap.values());
 
-      // Build PO map
-      const PO_BY_SKU = {};
-      FACILITIES.forEach(fac => {
-        (csvData[`po_${fac}`]||[]).forEach(r => {
-          const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
-          if (!sku) return;
-          if (!PO_BY_SKU[sku]) PO_BY_SKU[sku] = [];
-          PO_BY_SKU[sku].push({
-            po:(r['PO Code']||'—').trim(), vendor:(r['Vendor Name']||'—').trim(),
-            poDate:(r['Created']||'—').split(' ')[0], delDate:(r['Delivery Date']||'—').split(' ')[0],
-            ordered:n(r['Order Quantity']||0), rcvd:n(r['Recieved Quantity']||0),
-            rejected:n(r['Rejected Quantity']||0), pending:n(r['Pending Quantity']||0),
-            ageing:n(r['PO Ageing (Days)']||0), unitPrice:n(r['Unit Price']||0),
-            total:n(r['Total']||0),
-            status:(r['Purchase Order Status']||'COMPLETE').toUpperCase().replace(/ /g,'_'),
-            itemName:(r['Item Type Name']||sku).trim(), facility:fac,
+      // ── STEP 5: Save cache if full fetch ──
+      if (needFull) {
+        try {
+          await fetch('/api/uniware', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'save_cache', inventory, po: poBySkuMapNew }),
           });
-        });
-      });
+        } catch {}
+      }
 
-      setInv(inventory.map(r => ({
-        ...r,
-        drr7:   Math.round(r.drr7   || 0),
-        drr15:  Math.round(r.drr15  || 0),
-        drr30:  Math.round(r.drr30  || 0),
-        drrMax: Math.round(r.drrMax || 0),
-      })));
-      setPoBySkuMap(PO_BY_SKU);
+      setInv(inventory);
+      setPoBySkuMap(poBySkuMapNew);
       setGrnData([]);
       setFetchedAt(new Date().toISOString());
       setErrors({});
       setStatus('ok');
-      showToast(`✓ ${inventory.length} SKUs loaded across 4 facilities`, 'ok');
+      showToast(`✓ ${inventory.length} SKUs loaded (${needFull ? 'full' : 'delta'} fetch)`, 'ok');
 
     } catch (err) {
       setStatus('error');
@@ -645,9 +458,13 @@ const SKU_WHITELIST = {
             </div>
           </div>
           <div className="top-right">
-            <button className="btn-refresh" onClick={fetchAll} disabled={loading}>
+            <button className="btn-refresh" onClick={() => fetchAll(false)} disabled={loading}>
               <i className={`ti ${loading ? 'ti-loader-2 spin' : 'ti-refresh'}`} style={{ fontSize: 13 }} />
               {loading ? 'Fetching…' : 'Refresh from Uniware'}
+            </button>
+            <button className="btn-refresh" onClick={() => fetchAll(true)} disabled={loading} title="Force full 30-day fetch" style={{fontSize:11,padding:'7px 10px'}}>
+              <i className="ti ti-refresh-alert" style={{ fontSize: 13 }} />
+              Full fetch
             </button>
             <div className="time-chip">
               <span className={`live-dot ${status === 'loading' ? 'fetching' : status === 'error' ? 'error' : status === 'ok' ? '' : 'idle'}`} />
