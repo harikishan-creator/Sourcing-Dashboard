@@ -1,54 +1,67 @@
 /**
- * pages/api/uniware.js
+ * pages/api/uniware.js — Secure Vercel proxy
  *
- * Redesigned for Vercel Hobby (10s timeout) and Pro (300s):
+ * Smart fetch strategy:
+ *   FULL FETCH  (once per day):    Inventory Snapshot + 30d/15d/7d DRR + PO
+ *   DELTA FETCH (subsequent calls): Inventory Snapshot + 48h DRR only (fast)
  *
- * Single job per request — frontend calls multiple times:
- *   POST /api/uniware { action: 'trigger', type: 'inventory', facility: 'MSKT_FZP' }
- *     → { jobCode, facility, type }
- *   POST /api/uniware { action: 'poll', jobCode, facility }
- *     → { status, url } or { status: 'RUNNING' }
- *   POST /api/uniware { action: 'download', url }
- *     → { rows }
- *   GET  /api/uniware?type=ping
- *     → { ok: true }  (health check)
+ * Each individual action completes in < 10s (Vercel Hobby limit).
  */
 
-import { init, triggerJob, pollJob, downloadCSV, parseDRR, parseInventoryRows, parsePORows } from '../../lib/mcpClient';
+import { init, triggerJob, pollJob, downloadCSV } from '../../lib/mcpClient';
+import { shouldDoFullFetch, getCachedInventory, getCachedPO, saveCache, getLastFullFetch } from './cache';
 
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (!process.env.MCP_TOKEN) return res.status(500).json({ error: 'MCP_TOKEN not configured' });
 
-  // Health check
-  if (req.method === 'GET' && req.query.type === 'ping') {
-    return res.status(200).json({ ok: true });
+  // Health / info check
+  if (req.method === 'GET') {
+    const needFull = shouldDoFullFetch();
+    const lastFull = getLastFullFetch();
+    return res.status(200).json({
+      ok: true,
+      needFullFetch: needFull,
+      lastFullFetch: lastFull,
+      mode: needFull ? 'full' : 'delta',
+    });
   }
 
   if (req.method !== 'POST') return res.status(405).json({ error: 'Use POST' });
 
-  const { action, type, facility, jobCode, url, days } = req.body || {};
+  const { action, type, facility, jobCode, url } = req.body || {};
 
   try {
     await init();
 
     if (action === 'trigger') {
-      // Trigger one export job and return jobCode immediately
       const code = await triggerJob(type, facility);
       return res.status(200).json({ jobCode: code, facility, type });
     }
 
     if (action === 'poll') {
-      // Poll one job — returns fast
       const result = await pollJob(jobCode, facility);
       return res.status(200).json(result);
     }
 
     if (action === 'download') {
-      // Download CSV and parse it — returns rows
       const rows = await downloadCSV(url);
       return res.status(200).json({ rows });
+    }
+
+    if (action === 'save_cache') {
+      const { inventory, po } = req.body;
+      saveCache(inventory, po);
+      return res.status(200).json({ saved: true });
+    }
+
+    if (action === 'get_cache') {
+      return res.status(200).json({
+        inventory: getCachedInventory(),
+        po:        getCachedPO(),
+        lastFullFetch: getLastFullFetch(),
+      });
     }
 
     return res.status(400).json({ error: `Unknown action: ${action}` });
