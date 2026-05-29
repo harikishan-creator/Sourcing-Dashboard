@@ -265,7 +265,8 @@ export default function Dashboard() {
 
       if (needFull) {
         showToast('Fetching POs…', 'info');
-        for (const fac of FACILITIES) {
+        const PO_FACILITIES = ['astrotalk', 'MSKT_FZP']; // POs only from these 2 facilities
+        for (const fac of PO_FACILITIES) {
           const rows = await runJob('po', fac);
           rows.forEach(r => {
             const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
