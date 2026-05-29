@@ -31,6 +31,10 @@ function getAction(r) {
 }
 
 function isSpike(r) { return r.drr7 > 0 && r.drr30 > 0 && (r.drr7 / r.drr30) >= 1.5; }
+function isDeclining(r) {
+  // 7d DRR must be lower than BOTH 15d and 30d, and there must be some sales history
+  return r.drr30 > 0 && r.drr7 < r.drr15 && r.drr7 < r.drr30;
+}
 function spikePriority(r) { const rt = r.drr7 / r.drr30; return (rt >= 3 || r.doc < 15) ? 1 : rt >= 2 ? 2 : 3; }
 
 function docGradColor(doc) {
@@ -244,13 +248,11 @@ export default function Dashboard() {
 
       // Step 2: DRR - full (7d+15d+30d) or delta (48h)
       showToast(needFull ? 'Fetching 7d/15d/30d sales…' : 'Fetching 48h delta…', 'info');
-      const drr7Data = {}, drr15Data = {}, drr30Data = {};
+      // Optimized: fetch only 30d export per facility (was 3 jobs per facility)
+      // 7d and 15d DRR derived by filtering rows by 'Created' date — saves 8 jobs
+      const drr30Data = {};
       for (const fac of FACILITIES) {
-        drr7Data[fac] = await runJob('drr7', fac);
-        if (needFull) {
-          drr15Data[fac] = await runJob('drr15', fac);
-          drr30Data[fac] = await runJob('drr30', fac);
-        }
+        drr30Data[fac] = await runJob('drr30', fac);
       }
 
       // Step 3: PO - full fetch or from cache
@@ -287,11 +289,16 @@ export default function Dashboard() {
       }
 
       // Step 4: Calculate DRR & DOC
+      // calcDRR: counts rows per SKU within a date window
       const calcDRR = (rows, days) => {
+        const cutoff = Date.now() - days * 86400000;
         const c = {};
         (rows||[]).forEach(r => {
           const s = (r['Item SKU Code']||r['Item SkuCode']||'').trim();
-          if (s) c[s] = (c[s]||0) + 1;
+          if (!s) return;
+          // Filter by Created date for window-specific DRR
+          const created = r['Created'] ? new Date(r['Created']).getTime() : 0;
+          if (created >= cutoff) c[s] = (c[s]||0) + 1;
         });
         const d = {};
         Object.entries(c).forEach(([s,t]) => { d[s] = rnd(t/days); });
@@ -304,13 +311,10 @@ export default function Dashboard() {
         return m;
       };
 
-      const drr7Map  = merge(...FACILITIES.map(f => calcDRR(drr7Data[f], 7)));
-      const drr15Map = needFull
-        ? merge(...FACILITIES.map(f => calcDRR(drr15Data[f], 15)))
-        : merge(...FACILITIES.map(f => calcDRR(drr7Data[f], 2)));
-      const drr30Map = needFull
-        ? merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 30)))
-        : drr15Map;
+      // All 3 DRR windows from the single 30d export — saves 8 export jobs
+      const drr7Map  = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 7)));
+      const drr15Map = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 15)));
+      const drr30Map = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 30)));
 
       const skuMap = new Map();
       FACILITIES.forEach(fac => {
@@ -374,6 +378,7 @@ export default function Dashboard() {
   var cats        = [...new Set(whitelistedInv.map(r => r.cat))].sort();
   var filteredInv = catFilter ? whitelistedInv.filter(r => r.cat === catFilter) : whitelistedInv;
   var spikes      = whitelistedInv.filter(isSpike).map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) })).sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
+  var declining   = whitelistedInv.filter(isDeclining).map(r => ({ ...r, dropRatio: r.drr30 > 0 ? rnd((1 - r.drr7 / r.drr30) * 100) : 0 })).sort((a, b) => b.dropRatio - a.dropRatio);
   var pn  = whitelistedInv.filter(r => r.doc === 0 && r.inv === 0).length;
   var pc  = whitelistedInv.filter(r => r.doc > 0 && r.doc <= 15).length;
   var ovs = whitelistedInv.filter(r => r.doc > 60 && r.doc <= 180).length;
@@ -529,7 +534,7 @@ export default function Dashboard() {
             { id: 'doc',    icon: 'ti-layout-grid',    label: 'DOC ranges'  },
             { id: 'po',     icon: 'ti-clipboard-list', label: 'Open POs'    },
             { id: 'spikes', icon: 'ti-flame',          label: 'Sales spikes'},
-            { id: 'grn',    icon: 'ti-package-import', label: 'GRN'         },
+            { id: 'declining', icon: 'ti-trending-down', label: 'Declining'   },
           ].map(t => (
             <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); }}>
               <i className={`ti ${t.icon}`} style={{ fontSize: 13 }} />{t.label}
@@ -805,30 +810,58 @@ export default function Dashboard() {
         )}
 
         {/* ── GRN TAB ── */}
-        {activeTab === 'grn' && (
+        {activeTab === 'declining' && (
           <div className="card">
             <div className="card-head">
-              <span className="card-title"><i className="ti ti-package-import" style={{ fontSize: 15, color: 'var(--blue)' }} />GRN — last 30 days</span>
-              <span className="card-chip">{grnData.length} records</span>
+              <span className="card-title">
+                <i className="ti ti-trending-down" style={{ fontSize: 15, color: 'var(--red-mid)' }} />
+                Declining Sales
+                <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400, marginLeft: 8 }}>7d DRR &lt; 15d DRR and 30d DRR</span>
+              </span>
+              <span className="card-chip">{declining.length} skus</span>
             </div>
-            <div style={{ overflowX: 'auto' }}>
-              {grnData.length === 0
-                ? <div className="empty-state"><i className="ti ti-package-off" /><p>{loading ? 'Loading GRN from Uniware…' : 'No GRN data — click Refresh'}</p></div>
-                : (
+            {declining.length === 0
+              ? <div className="empty-state"><i className="ti ti-trending-down" /><p>{loading ? 'Loading…' : 'No declining SKUs — all items are stable or growing'}</p></div>
+              : (
+                <div style={{ overflowX: 'auto' }}>
                   <table className="detail">
                     <thead>
-                      <tr>{Object.keys(grnData[0] || {}).slice(0, 10).map(k => <th key={k}>{k}</th>)}</tr>
+                      <tr>
+                        <th>SKU</th>
+                        <th>ITEM</th>
+                        <th>CATEGORY</th>
+                        <th className="r">7D DRR</th>
+                        <th className="r">15D DRR</th>
+                        <th className="r">30D DRR</th>
+                        <th className="r">DROP %</th>
+                        <th className="r">INVENTORY</th>
+                        <th className="r">DOC</th>
+                      </tr>
                     </thead>
                     <tbody>
-                      {grnData.slice(0, 100).map((r, i) => (
-                        <tr key={i}>
-                          {Object.values(r).slice(0, 10).map((v, j) => <td key={j} style={{ fontSize: 11, fontFamily: 'var(--mono)' }}>{v}</td>)}
+                      {declining.map((r, i) => (
+                        <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'var(--bg3)' }}>
+                          <td><span className="sku-badge">{r.sku}</span></td>
+                          <td style={{ fontWeight: 500 }}>{r.name}</td>
+                          <td style={{ color: 'var(--text3)', fontSize: 11 }}>{r.cat}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--red-mid)', fontWeight: 700 }}>{rnd(r.drr7)}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr15)}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr30)}</td>
+                          <td className="r">
+                            <span style={{
+                              background: r.dropRatio > 50 ? 'var(--red-dim)' : r.dropRatio > 25 ? 'var(--amber-dim)' : 'var(--bg3)',
+                              color: r.dropRatio > 50 ? 'var(--red-mid)' : r.dropRatio > 25 ? 'var(--amber-mid)' : 'var(--text2)',
+                              padding: '2px 7px', borderRadius: 4, fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 600
+                            }}>−{r.dropRatio}%</span>
+                          </td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)' }}>{r.inv.toLocaleString()}</td>
+                          <td className="r"><DocBadge doc={r.doc} /></td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                )}
-            </div>
+                </div>
+              )}
           </div>
         )}
       </div>
