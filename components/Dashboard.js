@@ -137,6 +137,7 @@ export default function Dashboard() {
 
   const [activeTab,   setActiveTab]   = useState('doc');
   const [leadDays,    setLeadDays]    = useState(LEAD_DAYS_DEFAULT);
+  const [tabSearch,   setTabSearch]   = useState('');
   const [catFilter,   setCatFilter]   = useState('');
   const [poSearch,    setPoSearch]    = useState('');
   const [poStatusF,   setPoStatusF]   = useState('');
@@ -432,11 +433,23 @@ export default function Dashboard() {
   // ── derived data (all in one block to prevent bundler reordering TDZ) ──
   var whitelistedInv = inv.filter(r => SKU_CAT_MAP[r.sku]);
   var cats        = [...new Set(whitelistedInv.map(r => r.cat))].sort();
-  var filteredInv = catFilter ? whitelistedInv.filter(r => r.cat === catFilter) : whitelistedInv;
-  var spikes      = whitelistedInv.filter(isSpike).map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) })).sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
-  var declining   = whitelistedInv.filter(isDeclining).map(r => ({ ...r, dropRatio: r.drr30 > 0 ? rnd((1 - r.drr7 / r.drr30) * 100) : 0 })).sort((a, b) => b.dropRatio - a.dropRatio);
+  var _docQ    = tabSearch.toLowerCase();
+  var filteredInv = whitelistedInv
+    .filter(r => !catFilter || r.cat === catFilter)
+    .filter(r => !_docQ || r.sku.toLowerCase().includes(_docQ) || r.name.toLowerCase().includes(_docQ));
+  var _spikeQ  = tabSearch.toLowerCase();
+  var spikes      = whitelistedInv.filter(isSpike)
+    .filter(r => !_spikeQ || r.sku.toLowerCase().includes(_spikeQ) || r.name.toLowerCase().includes(_spikeQ))
+    .map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) }))
+    .sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
+  var _declQ   = tabSearch.toLowerCase();
+  var declining   = whitelistedInv.filter(isDeclining)
+    .filter(r => !_declQ || r.sku.toLowerCase().includes(_declQ) || r.name.toLowerCase().includes(_declQ))
+    .map(r => ({ ...r, dropRatio: r.drr30 > 0 ? rnd((1 - r.drr7 / r.drr30) * 100) : 0 }))
+    .sort((a, b) => b.dropRatio - a.dropRatio);
+  var _fcQ     = tabSearch.toLowerCase();
   var forecast    = whitelistedInv
-    .filter(function(r) { return r.drr30 > 0 || r.drr15 > 0 || r.drr7 > 0; })
+    .filter(function(r) { return (r.drr30 > 0 || r.drr15 > 0 || r.drr7 > 0) && (!_fcQ || r.sku.toLowerCase().includes(_fcQ) || r.name.toLowerCase().includes(_fcQ)); })
     .map(function(r) { return Object.assign({}, r, forecastSKU(r, poBySkuMap[r.sku], leadDays)); })
     .sort(function(a, b) {
       var o = { stockout:0, overdue:1, urgent:2, soon:3, ok:4, no_sales:5 };
@@ -600,11 +613,34 @@ export default function Dashboard() {
             { id: 'declining', icon: 'ti-trending-down', label: 'Declining'   },
             { id: 'forecast',  icon: 'ti-crystal-ball',  label: 'Forecast'    },
           ].map(t => (
-            <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); }}>
+            <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); setTabSearch(''); }}>
               <i className={`ti ${t.icon}`} style={{ fontSize: 13 }} />{t.label}
             </button>
           ))}
         </div>
+
+        {/* SEARCH BAR */}
+        {['doc','spikes','declining','forecast'].includes(activeTab) && (
+          <div style={{position:'relative',marginBottom:'1rem',maxWidth:340}}>
+            <i className="ti ti-search" style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',
+              color:'var(--text3)',fontSize:13,pointerEvents:'none'}} />
+            <input
+              type="text"
+              placeholder={`Search SKU or item name in ${activeTab}…`}
+              value={tabSearch}
+              onChange={e => setTabSearch(e.target.value)}
+              style={{width:'100%',padding:'7px 10px 7px 30px',border:'1px solid var(--border)',
+                borderRadius:8,fontFamily:'var(--mono)',fontSize:12,background:'var(--bg2)',
+                color:'var(--text)',outline:'none'}}
+            />
+            {tabSearch && (
+              <button onClick={() => setTabSearch('')}
+                style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',
+                  background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:14,
+                  lineHeight:1,padding:2}}>×</button>
+            )}
+          </div>
+        )}
 
         {/* PO PANEL (SKU drill) */}
         {poPanel && (
