@@ -32,8 +32,62 @@ function getAction(r) {
 
 function isSpike(r) { return r.drr7 > 0 && r.drr30 > 0 && (r.drr7 / r.drr30) >= 1.5; }
 function isDeclining(r) {
-  // 7d DRR must be lower than BOTH 15d and 30d, and there must be some sales history
   return r.drr30 > 0 && r.drr7 < r.drr15 && r.drr7 < r.drr30;
+}
+
+// ── Forecast (30-day based, weighted DRR) ─────────────────────────────────────
+var LEAD_DAYS_DEFAULT = 7;
+
+function weightedDRR(r) {
+  // Weighted: recent sales matter more. 7d=50%, 15d=30%, 30d=20%
+  // Smooths spikes without needing 90-day data
+  if (r.drr7 === 0 && r.drr15 === 0 && r.drr30 === 0) return 0;
+  return Math.round(r.drr7 * 0.5 + r.drr15 * 0.3 + r.drr30 * 0.2);
+}
+
+function forecastSKU(r, poList, leadDays) {
+  var wdrr   = weightedDRR(r);
+  var inv    = r.inv || 0;
+  var today  = Date.now();
+  var DAY    = 86400000;
+
+  // DOC based on weighted DRR (more stable than max DRR)
+  var wdoc   = wdrr > 0 ? Math.round(inv / wdrr) : (inv > 0 ? 999 : 0);
+
+  // Key dates
+  var stockoutMs  = wdrr > 0 ? today + wdoc * DAY : null;
+  var reorderMs   = stockoutMs ? stockoutMs - leadDays * DAY : null;
+  var daysLeft    = reorderMs ? Math.round((reorderMs - today) / DAY) : null;
+
+  // 60-day need = how many units needed to cover next 60 days
+  var need60      = wdrr > 0 ? Math.max(0, wdrr * 60 - inv) : 0;
+
+  // Open PO coverage (non-closed POs only)
+  var openPOUnits = (poList || [])
+    .filter(function(p) { return p.status !== 'CLOSED' && p.status !== 'CANCELLED'; })
+    .reduce(function(s, p) { return s + (p.pending || 0); }, 0);
+
+  var netNeed     = Math.max(0, need60 - openPOUnits);
+
+  // Trend: compare recent 7d vs baseline 30d
+  var trendPct    = r.drr30 > 0 ? Math.round((r.drr7 - r.drr30) / r.drr30 * 100) : 0;
+  var trend       = trendPct >= 20 ? 'rising' : trendPct <= -20 ? 'falling' : 'stable';
+
+  // Urgency
+  var urgency = 'ok';
+  if (wdrr === 0)                          urgency = 'no_sales';
+  else if (inv === 0)                      urgency = 'stockout';
+  else if (daysLeft !== null && daysLeft <= 0)  urgency = 'overdue';
+  else if (daysLeft !== null && daysLeft <= 7)  urgency = 'urgent';
+  else if (daysLeft !== null && daysLeft <= 14) urgency = 'soon';
+
+  var fmt = function(ms) {
+    if (!ms) return '—';
+    return new Date(ms).toISOString().split('T')[0];
+  };
+
+  return { wdrr, wdoc, stockoutDate: fmt(stockoutMs), reorderDate: fmt(reorderMs),
+           daysLeft, need60, openPOUnits, netNeed, trend, trendPct, urgency };
 }
 function spikePriority(r) { const rt = r.drr7 / r.drr30; return (rt >= 3 || r.doc < 15) ? 1 : rt >= 2 ? 2 : 3; }
 
@@ -82,6 +136,7 @@ export default function Dashboard() {
   const [status,    setStatus]    = useState('idle'); // idle | loading | ok | error
 
   const [activeTab,   setActiveTab]   = useState('doc');
+  const [leadDays,    setLeadDays]    = useState(LEAD_DAYS_DEFAULT);
   const [catFilter,   setCatFilter]   = useState('');
   const [poSearch,    setPoSearch]    = useState('');
   const [poStatusF,   setPoStatusF]   = useState('');
@@ -380,6 +435,13 @@ export default function Dashboard() {
   var filteredInv = catFilter ? whitelistedInv.filter(r => r.cat === catFilter) : whitelistedInv;
   var spikes      = whitelistedInv.filter(isSpike).map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) })).sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
   var declining   = whitelistedInv.filter(isDeclining).map(r => ({ ...r, dropRatio: r.drr30 > 0 ? rnd((1 - r.drr7 / r.drr30) * 100) : 0 })).sort((a, b) => b.dropRatio - a.dropRatio);
+  var forecast    = whitelistedInv
+    .filter(function(r) { return r.drr30 > 0 || r.drr15 > 0 || r.drr7 > 0; })
+    .map(function(r) { return Object.assign({}, r, forecastSKU(r, poBySkuMap[r.sku], leadDays)); })
+    .sort(function(a, b) {
+      var o = { stockout:0, overdue:1, urgent:2, soon:3, ok:4, no_sales:5 };
+      return (o[a.urgency]||4) - (o[b.urgency]||4) || (a.daysLeft||999) - (b.daysLeft||999);
+    });
   var pn  = whitelistedInv.filter(r => r.doc === 0 && r.inv === 0).length;
   var pc  = whitelistedInv.filter(r => r.doc > 0 && r.doc <= 15).length;
   var ovs = whitelistedInv.filter(r => r.doc > 60 && r.doc <= 180).length;
@@ -536,6 +598,7 @@ export default function Dashboard() {
             { id: 'po',     icon: 'ti-clipboard-list', label: 'Open POs'    },
             { id: 'spikes', icon: 'ti-flame',          label: 'Sales spikes'},
             { id: 'declining', icon: 'ti-trending-down', label: 'Declining'   },
+            { id: 'forecast',  icon: 'ti-crystal-ball',  label: 'Forecast'    },
           ].map(t => (
             <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); }}>
               <i className={`ti ${t.icon}`} style={{ fontSize: 13 }} />{t.label}
@@ -866,6 +929,155 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+        {activeTab === 'forecast' && (
+          <div className="card">
+
+            {/* Header */}
+            <div className="card-head" style={{flexWrap:'wrap',gap:8}}>
+              <span className="card-title">
+                <i className="ti ti-crystal-ball" style={{fontSize:15,color:'var(--purple)'}} />
+                Inventory Forecast
+                <span style={{fontSize:11,color:'var(--text3)',fontWeight:400,marginLeft:8}}>
+                  30-day weighted DRR · 60-day need horizon
+                </span>
+              </span>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginLeft:'auto',flexWrap:'wrap'}}>
+                <span style={{fontSize:11,color:'var(--text3)'}}>Lead time:</span>
+                <input type="number" min="1" max="90" value={leadDays}
+                  onChange={e => setLeadDays(Math.max(1, parseInt(e.target.value)||7))}
+                  style={{width:52,padding:'3px 6px',border:'1px solid var(--border)',borderRadius:6,
+                          fontFamily:'var(--mono)',fontSize:12,background:'var(--bg2)'}} />
+                <span style={{fontSize:11,color:'var(--text3)'}}>days</span>
+                <span className="card-chip">{forecast.length} skus</span>
+              </div>
+            </div>
+
+            {/* Summary strip */}
+            <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
+              {[
+                {label:'🔴 Stockout',    val:forecast.filter(r=>r.urgency==='stockout').length, bg:'var(--red-dim)',   col:'var(--red-mid)'},
+                {label:'🔴 Overdue',     val:forecast.filter(r=>r.urgency==='overdue').length,  bg:'var(--red-dim)',   col:'var(--red-mid)'},
+                {label:'🟠 Reorder ≤7d', val:forecast.filter(r=>r.urgency==='urgent').length,   bg:'var(--amber-dim)', col:'var(--amber-mid)'},
+                {label:'🟡 Reorder ≤14d',val:forecast.filter(r=>r.urgency==='soon').length,     bg:'var(--amber-dim)', col:'var(--amber-mid)'},
+                {label:'🟢 Healthy',     val:forecast.filter(r=>r.urgency==='ok').length,        bg:'var(--green-dim)', col:'var(--green)'},
+                {label:'↑ Rising',       val:forecast.filter(r=>r.trend==='rising').length,     bg:'var(--blue-dim)',  col:'var(--blue)'},
+                {label:'↓ Falling',      val:forecast.filter(r=>r.trend==='falling').length,    bg:'var(--red-dim)',   col:'var(--red-mid)'},
+              ].map(({label,val,bg,col}) => (
+                <div key={label} style={{background:bg,border:`1px solid ${col}44`,borderRadius:8,
+                                         padding:'7px 12px',minWidth:90,textAlign:'center'}}>
+                  <div style={{fontSize:22,fontWeight:700,color:col,fontFamily:'var(--mono)'}}>{val}</div>
+                  <div style={{fontSize:10,color:col,marginTop:1}}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Methodology note */}
+            <div style={{background:'var(--blue-dim)',border:'1px solid rgba(26,95,165,.2)',borderRadius:8,
+                         padding:'8px 14px',marginBottom:14,fontSize:11,color:'var(--blue)',lineHeight:1.6}}>
+              <strong>How forecast is calculated (30-day data):</strong>
+              &nbsp;Weighted DRR = (7d × 50%) + (15d × 30%) + (30d × 20%) &nbsp;·&nbsp;
+              Stockout date = Today + (Inventory ÷ Weighted DRR) &nbsp;·&nbsp;
+              Reorder by = Stockout − {leadDays}d lead time &nbsp;·&nbsp;
+              60-day need = (Weighted DRR × 60) − Current Inventory − Open POs
+            </div>
+
+            {forecast.length === 0
+              ? <div className="empty-state">
+                  <i className="ti ti-crystal-ball" />
+                  <p>{loading ? 'Loading…' : 'No data yet — click Refresh from Uniware'}</p>
+                </div>
+              : (
+                <div style={{overflowX:'auto'}}>
+                  <table className="detail">
+                    <thead>
+                      <tr>
+                        <th>SKU</th>
+                        <th>ITEM</th>
+                        <th>CAT</th>
+                        <th className="r" title="Weighted DRR = 7d×50% + 15d×30% + 30d×20%">W.DRR</th>
+                        <th className="r">7D</th>
+                        <th className="r">30D</th>
+                        <th className="r">INV</th>
+                        <th className="r">DOC</th>
+                        <th className="r">STOCKOUT</th>
+                        <th className="r">REORDER BY</th>
+                        <th className="r">DAYS LEFT</th>
+                        <th className="r">NEED 60D</th>
+                        <th className="r">OPEN PO</th>
+                        <th className="r">NET NEED</th>
+                        <th className="r">TREND</th>
+                        <th>STATUS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {forecast.map(function(r, i) {
+                        var urgCfg = {
+                          stockout: {bg:'var(--red-dim)',   col:'var(--red-mid)',   label:'🔴 Stockout'},
+                          overdue:  {bg:'var(--red-dim)',   col:'var(--red-mid)',   label:'🔴 Overdue'},
+                          urgent:   {bg:'var(--amber-dim)', col:'var(--amber-mid)', label:'🟠 ≤7d'},
+                          soon:     {bg:'var(--amber-dim)', col:'var(--amber-mid)', label:'🟡 ≤14d'},
+                          ok:       {bg:'var(--green-dim)', col:'var(--green)',     label:'🟢 OK'},
+                          no_sales: {bg:'var(--bg3)',       col:'var(--text3)',     label:'⚪ No Sales'},
+                        };
+                        var uc  = urgCfg[r.urgency] || urgCfg.ok;
+                        var trendCol  = r.trend==='rising'?'var(--green)':r.trend==='falling'?'var(--red-mid)':'var(--text3)';
+                        var trendIcon = r.trend==='rising'?'↑':r.trend==='falling'?'↓':'→';
+                        var rowBg = r.urgency==='stockout'||r.urgency==='overdue' ? 'rgba(139,28,28,.04)' : i%2===0?'transparent':'var(--bg3)';
+                        return (
+                          <tr key={i} style={{background:rowBg}}>
+                            <td><span className="sku-badge">{r.sku}</span></td>
+                            <td style={{fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}</td>
+                            <td style={{color:'var(--text3)',fontSize:11}}>{r.cat}</td>
+                            <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:'var(--blue)'}}
+                                title={'7d×0.5 + 15d×0.3 + 30d×0.2 = '+r.wdrr}>
+                              {r.wdrr}
+                            </td>
+                            <td className="r" style={{fontFamily:'var(--mono)',fontSize:11,
+                                color:r.drr7>r.drr30?'var(--amber-mid)':'var(--text3)'}}>{rnd(r.drr7)}</td>
+                            <td className="r" style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text3)'}}>{rnd(r.drr30)}</td>
+                            <td className="r" style={{fontFamily:'var(--mono)'}}>{r.inv.toLocaleString()}</td>
+                            <td className="r"><DocBadge doc={r.wdoc} /></td>
+                            <td className="r" style={{fontFamily:'var(--mono)',fontSize:11,
+                                color:r.wdoc<15?'var(--red-mid)':'var(--text2)'}}>{r.stockoutDate}</td>
+                            <td className="r" style={{fontFamily:'var(--mono)',fontSize:11,
+                                color:r.daysLeft!==null&&r.daysLeft<=7?'var(--red-mid)':'var(--text2)'}}>{r.reorderDate}</td>
+                            <td className="r">
+                              {r.daysLeft===null ? '—' : (
+                                <span style={{fontFamily:'var(--mono)',fontWeight:700,
+                                    color:r.daysLeft<=0?'var(--red-mid)':r.daysLeft<=7?'var(--amber-mid)':'var(--text2)'}}>
+                                  {r.daysLeft<=0 ? Math.abs(r.daysLeft)+'d ago' : r.daysLeft+'d'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="r" style={{fontFamily:'var(--mono)'}}>{r.need60.toLocaleString()}</td>
+                            <td className="r" style={{fontFamily:'var(--mono)',color:'var(--blue)'}}>{r.openPOUnits.toLocaleString()}</td>
+                            <td className="r">
+                              <span style={{fontFamily:'var(--mono)',fontWeight:700,
+                                  color:r.netNeed>0?'var(--red-mid)':'var(--green)'}}>
+                                {r.netNeed>0 ? r.netNeed.toLocaleString() : '✓ Covered'}
+                              </span>
+                            </td>
+                            <td className="r">
+                              <span style={{fontFamily:'var(--mono)',fontWeight:600,color:trendCol}}>
+                                {trendIcon} {r.trendPct>0?'+':''}{r.trendPct}%
+                              </span>
+                            </td>
+                            <td>
+                              <span style={{background:uc.bg,color:uc.col,padding:'2px 8px',
+                                  borderRadius:4,fontSize:10,fontWeight:600,whiteSpace:'nowrap'}}>
+                                {uc.label}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+          </div>
+        )}
 
       {/* TOAST */}
       {toast && <div className={`toast show ${toast.type}`}>{toast.msg}</div>}
