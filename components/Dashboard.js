@@ -137,6 +137,8 @@ export default function Dashboard() {
 
   const [activeTab,   setActiveTab]   = useState('doc');
   const [leadDays,    setLeadDays]    = useState(LEAD_DAYS_DEFAULT);
+  const [forecastFilter, setForecastFilter] = useState('');
+  const [docFilter,      setDocFilter]      = useState(''); // 'procure_now'|'procure'|'overstock'|'deadstock' // urgency or trend filter
   const [tabSearch,   setTabSearch]   = useState('');
   const [catFilter,   setCatFilter]   = useState('');
   const [poSearch,    setPoSearch]    = useState('');
@@ -436,7 +438,15 @@ export default function Dashboard() {
   var _docQ    = tabSearch.toLowerCase();
   var filteredInv = whitelistedInv
     .filter(r => !catFilter || r.cat === catFilter)
-    .filter(r => !_docQ || r.sku.toLowerCase().includes(_docQ) || r.name.toLowerCase().includes(_docQ));
+    .filter(r => !_docQ || r.sku.toLowerCase().includes(_docQ) || r.name.toLowerCase().includes(_docQ))
+    .filter(r => {
+      if (!docFilter) return true;
+      if (docFilter === 'procure_now') return r.doc === 0 && r.inv === 0;
+      if (docFilter === 'procure')     return r.doc > 0 && r.doc <= 15;
+      if (docFilter === 'overstock')   return r.doc > 60 && r.doc <= 180;
+      if (docFilter === 'deadstock')   return r.doc > 180;
+      return true;
+    });
   var _spikeQ  = tabSearch.toLowerCase();
   var spikes      = whitelistedInv.filter(isSpike)
     .filter(r => !_spikeQ || r.sku.toLowerCase().includes(_spikeQ) || r.name.toLowerCase().includes(_spikeQ))
@@ -451,6 +461,13 @@ export default function Dashboard() {
   var forecast    = whitelistedInv
     .filter(function(r) { return (r.drr30 > 0 || r.drr15 > 0 || r.drr7 > 0) && (!_fcQ || r.sku.toLowerCase().includes(_fcQ) || r.name.toLowerCase().includes(_fcQ)); })
     .map(function(r) { return Object.assign({}, r, forecastSKU(r, poBySkuMap[r.sku], leadDays)); })
+    .filter(function(r) {
+      if (!forecastFilter) return true;
+      if (['stockout','overdue','urgent','soon','ok','no_sales'].includes(forecastFilter)) return r.urgency === forecastFilter;
+      if (forecastFilter === 'rising')  return r.trend === 'rising';
+      if (forecastFilter === 'falling') return r.trend === 'falling';
+      return true;
+    })
     .sort(function(a, b) {
       var o = { stockout:0, overdue:1, urgent:2, soon:3, ok:4, no_sales:5 };
       return (o[a.urgency]||4) - (o[b.urgency]||4) || (a.daysLeft||999) - (b.daysLeft||999);
@@ -588,17 +605,34 @@ export default function Dashboard() {
         {inv.length > 0 && (
           <div className="metrics">
             {[
-              { lbl: 'Procure now',          val: pn,  sub: 'doc=0 · no stock',  cls: 'c-red',    icon: 'ti-alert-circle'   },
-              { lbl: 'Procure',              val: pc,  sub: 'doc 1–15 days',     cls: 'c-red',    icon: 'ti-shopping-cart'  },
-              { lbl: 'Overstock/Liquidate',  val: ovs, sub: 'doc 61–180 days',   cls: 'c-blue',   icon: 'ti-archive'        },
-              { lbl: 'Dead stock',           val: ds,  sub: 'doc > 180 days',    cls: 'c-teal',   icon: 'ti-ban'            },
-              { lbl: 'Sales spikes',         val: sp,  sub: '7d drr ≥ 1.5× 30d',cls: 'c-amber',  icon: 'ti-flame'          },
-              { lbl: 'Open PO lines',        val: ol,  sub: 'pending delivery',  cls: 'c-green',  icon: 'ti-clipboard-list' },
+              { lbl: 'Procure now',          val: pn,  sub: 'doc=0 · no stock',  cls: 'c-red',    icon: 'ti-alert-circle',   tab: 'doc',     docFilter: 'procure_now' },
+              { lbl: 'Procure',              val: pc,  sub: 'doc 1–15 days',     cls: 'c-red',    icon: 'ti-shopping-cart',  tab: 'doc',     docFilter: 'procure'     },
+              { lbl: 'Overstock/Liquidate',  val: ovs, sub: 'doc 61–180 days',   cls: 'c-blue',   icon: 'ti-archive',        tab: 'doc',     docFilter: 'overstock'   },
+              { lbl: 'Dead stock',           val: ds,  sub: 'doc > 180 days',    cls: 'c-teal',   icon: 'ti-ban',            tab: 'doc',     docFilter: 'deadstock'   },
+              { lbl: 'Sales spikes',         val: sp,  sub: '7d drr ≥ 1.5× 30d',cls: 'c-amber',  icon: 'ti-flame',          tab: 'spikes'                           },
+              { lbl: 'Open PO lines',        val: ol,  sub: 'pending delivery',  cls: 'c-green',  icon: 'ti-clipboard-list', tab: 'po'                               },
             ].map(c => (
-              <div key={c.lbl} className={`mc ${c.cls}`}>
+              <div key={c.lbl} className={`mc ${c.cls}`}
+                onClick={() => {
+                  if (c.tab) {
+                    setActiveTab(c.tab);
+                    setSkuPanel(null);
+                    setPoPanel(null);
+                    setTabSearch('');
+                    setForecastFilter('');
+                    setDocFilter('');
+                    if (c.docFilter)      setDocFilter(c.docFilter);
+                    if (c.forecastFilter) setForecastFilter(c.forecastFilter);
+                  }
+                }}
+                style={{ cursor: c.tab ? 'pointer' : 'default',
+                         transition: 'transform .12s, box-shadow .12s' }}
+                onMouseEnter={e => { if (c.tab) { e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,.1)'; }}}
+                onMouseLeave={e => { e.currentTarget.style.transform=''; e.currentTarget.style.boxShadow=''; }}
+              >
                 <div className="lbl"><i className={`ti ${c.icon}`} style={{ fontSize: 11 }} /> {c.lbl}</div>
                 <div className="val">{c.val}</div>
-                <div className="sub">{c.sub}</div>
+                <div className="sub">{c.sub}{c.tab ? <span style={{fontSize:9,opacity:.6,marginLeft:4}}>↗</span> : null}</div>
               </div>
             ))}
           </div>
@@ -613,7 +647,7 @@ export default function Dashboard() {
             { id: 'declining', icon: 'ti-trending-down', label: 'Declining'   },
             { id: 'forecast',  icon: 'ti-crystal-ball',  label: 'Forecast'    },
           ].map(t => (
-            <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); setTabSearch(''); }}>
+            <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); setTabSearch(''); setForecastFilter(''); setDocFilter(''); }}>
               <i className={`ti ${t.icon}`} style={{ fontSize: 13 }} />{t.label}
             </button>
           ))}
@@ -992,20 +1026,32 @@ export default function Dashboard() {
             {/* Summary strip */}
             <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
               {[
-                {label:'🔴 Stockout',    val:forecast.filter(r=>r.urgency==='stockout').length, bg:'var(--red-dim)',   col:'var(--red-mid)'},
-                {label:'🔴 Overdue',     val:forecast.filter(r=>r.urgency==='overdue').length,  bg:'var(--red-dim)',   col:'var(--red-mid)'},
-                {label:'🟠 Reorder ≤7d', val:forecast.filter(r=>r.urgency==='urgent').length,   bg:'var(--amber-dim)', col:'var(--amber-mid)'},
-                {label:'🟡 Reorder ≤14d',val:forecast.filter(r=>r.urgency==='soon').length,     bg:'var(--amber-dim)', col:'var(--amber-mid)'},
-                {label:'🟢 Healthy',     val:forecast.filter(r=>r.urgency==='ok').length,        bg:'var(--green-dim)', col:'var(--green)'},
-                {label:'↑ Rising',       val:forecast.filter(r=>r.trend==='rising').length,     bg:'var(--blue-dim)',  col:'var(--blue)'},
-                {label:'↓ Falling',      val:forecast.filter(r=>r.trend==='falling').length,    bg:'var(--red-dim)',   col:'var(--red-mid)'},
-              ].map(({label,val,bg,col}) => (
-                <div key={label} style={{background:bg,border:`1px solid ${col}44`,borderRadius:8,
-                                         padding:'7px 12px',minWidth:90,textAlign:'center'}}>
-                  <div style={{fontSize:22,fontWeight:700,color:col,fontFamily:'var(--mono)'}}>{val}</div>
-                  <div style={{fontSize:10,color:col,marginTop:1}}>{label}</div>
-                </div>
-              ))}
+                {label:'🔴 Stockout',    filter:'stockout', val:forecast.filter(r=>r.urgency==='stockout').length, bg:'var(--red-dim)',   col:'var(--red-mid)'},
+                {label:'🔴 Overdue',     filter:'overdue',  val:forecast.filter(r=>r.urgency==='overdue').length,  bg:'var(--red-dim)',   col:'var(--red-mid)'},
+                {label:'🟠 Reorder ≤7d', filter:'urgent',   val:forecast.filter(r=>r.urgency==='urgent').length,   bg:'var(--amber-dim)', col:'var(--amber-mid)'},
+                {label:'🟡 Reorder ≤14d',filter:'soon',     val:forecast.filter(r=>r.urgency==='soon').length,     bg:'var(--amber-dim)', col:'var(--amber-mid)'},
+                {label:'🟢 Healthy',     filter:'ok',       val:forecast.filter(r=>r.urgency==='ok').length,       bg:'var(--green-dim)', col:'var(--green)'},
+                {label:'↑ Rising',       filter:'rising',   val:forecast.filter(r=>r.trend==='rising').length,     bg:'var(--blue-dim)',  col:'var(--blue)'},
+                {label:'↓ Falling',      filter:'falling',  val:forecast.filter(r=>r.trend==='falling').length,    bg:'var(--red-dim)',   col:'var(--red-mid)'},
+              ].map(({label,val,bg,col,filter}) => {
+                var isActive = forecastFilter === filter;
+                return (
+                  <div key={label}
+                    onClick={() => setForecastFilter(isActive ? '' : filter)}
+                    style={{background:isActive?col:bg,
+                            border:`2px solid ${isActive?col:col+'44'}`,
+                            borderRadius:8,padding:'7px 12px',minWidth:90,textAlign:'center',
+                            cursor:'pointer',transition:'all .15s',
+                            boxShadow:isActive?`0 2px 8px ${col}44`:'none',
+                            transform:isActive?'scale(1.04)':'scale(1)'}}>
+                    <div style={{fontSize:22,fontWeight:700,
+                                 color:isActive?'#fff':col,fontFamily:'var(--mono)'}}>{val}</div>
+                    <div style={{fontSize:10,color:isActive?'rgba(255,255,255,.85)':col,marginTop:1}}>
+                      {label}{isActive?' ✕':''}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Methodology note */}
