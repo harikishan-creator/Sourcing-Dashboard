@@ -655,7 +655,7 @@ export default function Dashboard() {
 
         {/* SEARCH BAR */}
         {['doc','spikes','declining','forecast'].includes(activeTab) && (
-          <div style={{position:'relative',marginBottom:'1rem',maxWidth:340}}>
+          <div style={{position:'relative',marginBottom:'0.5rem',maxWidth:340}}>
             <i className="ti ti-search" style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',
               color:'var(--text3)',fontSize:13,pointerEvents:'none'}} />
             <input
@@ -1234,7 +1234,7 @@ export default function Dashboard() {
         .mc.c-blue .val{color:var(--blue)}.mc.c-green .val{color:var(--green)}
         .mc.c-amber .val{color:var(--amber-mid)}.mc.c-red .val{color:var(--red-mid)}
         .mc.c-teal .val{color:var(--teal)}.mc.c-purple .val{color:var(--purple)}
-        .tab-bar{display:flex;gap:4px;margin-bottom:1.25rem;background:var(--bg3);padding:4px;border-radius:10px;width:fit-content;border:1px solid var(--border)}
+        .tab-bar{display:flex;gap:4px;margin-bottom:0.5rem;background:var(--bg3);padding:4px;border-radius:10px;width:fit-content;border:1px solid var(--border)}
         .tb{display:flex;align-items:center;gap:7px;padding:7px 16px;font-size:12px;font-family:var(--sans);border:none;border-radius:7px;cursor:pointer;background:none;color:var(--text3);font-weight:500;transition:all .15s}
         .tb:hover{color:var(--text);background:var(--bg4)}
         .tb.active{background:var(--bg2);color:var(--text);border:1px solid var(--border2);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.08)}
