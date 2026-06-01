@@ -779,6 +779,18 @@ export default function Dashboard() {
                 <span className="card-title"><i className="ti ti-layout-grid" style={{ fontSize: 15, color: 'var(--blue)' }} />Items by DOC range</span>
                 <span className="card-chip">{whitelistedInv.length} skus</span>
               </div>
+              <div style={{position:'relative',minWidth:200,maxWidth:260}}>
+                  <i className="ti ti-search" style={{position:'absolute',left:8,top:'50%',
+                    transform:'translateY(-50%)',color:'var(--text3)',fontSize:12,pointerEvents:'none'}} />
+                  <input type="text" placeholder="Search SKU or name…" value={tabSearch}
+                    onChange={e => setTabSearch(e.target.value)}
+                    style={{width:'100%',padding:'5px 26px 5px 26px',border:'1px solid var(--border)',
+                      borderRadius:7,fontFamily:'var(--mono)',fontSize:11,background:'var(--bg2)',
+                      color:'var(--text)',outline:'none'}} />
+                  {tabSearch && <button onClick={()=>setTabSearch('')} style={{position:'absolute',right:7,
+                    top:'50%',transform:'translateY(-50%)',background:'none',border:'none',
+                    cursor:'pointer',color:'var(--text3)',fontSize:13,lineHeight:1,padding:0}}>×</button>}
+                </div>
               <select className="filter-input" value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ minWidth: 150 }}>
                 <option value="">All categories</option>
                 {cats.map(c => <option key={c} value={c}>{c}</option>)}
@@ -902,6 +914,18 @@ export default function Dashboard() {
                 <span className="card-title"><i className="ti ti-flame" style={{ fontSize: 15, color: 'var(--amber-mid)' }} />Sales spikes</span>
                 <span className="card-chip">7d DRR &gt; 15d &amp; 30d · ratio ≥ 1.5×</span>
               </div>
+              <div style={{position:'relative',minWidth:200,maxWidth:260}}>
+                  <i className="ti ti-search" style={{position:'absolute',left:8,top:'50%',
+                    transform:'translateY(-50%)',color:'var(--text3)',fontSize:12,pointerEvents:'none'}} />
+                  <input type="text" placeholder="Search SKU or name…" value={tabSearch}
+                    onChange={e => setTabSearch(e.target.value)}
+                    style={{width:'100%',padding:'5px 26px 5px 26px',border:'1px solid var(--border)',
+                      borderRadius:7,fontFamily:'var(--mono)',fontSize:11,background:'var(--bg2)',
+                      color:'var(--text)',outline:'none'}} />
+                  {tabSearch && <button onClick={()=>setTabSearch('')} style={{position:'absolute',right:7,
+                    top:'50%',transform:'translateY(-50%)',background:'none',border:'none',
+                    cursor:'pointer',color:'var(--text3)',fontSize:13,lineHeight:1,padding:0}}>×</button>}
+                </div>
             </div>
             <div style={{ overflowX: 'auto' }}>
               {inv.length === 0
@@ -953,6 +977,18 @@ export default function Dashboard() {
                 <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400, marginLeft: 8 }}>7d DRR &lt; 15d DRR and 30d DRR</span>
               </span>
               <span className="card-chip">{declining.length} skus</span>
+              <div style={{position:'relative',minWidth:200,maxWidth:260}}>
+                  <i className="ti ti-search" style={{position:'absolute',left:8,top:'50%',
+                    transform:'translateY(-50%)',color:'var(--text3)',fontSize:12,pointerEvents:'none'}} />
+                  <input type="text" placeholder="Search SKU or name…" value={tabSearch}
+                    onChange={e => setTabSearch(e.target.value)}
+                    style={{width:'100%',padding:'5px 26px 5px 26px',border:'1px solid var(--border)',
+                      borderRadius:7,fontFamily:'var(--mono)',fontSize:11,background:'var(--bg2)',
+                      color:'var(--text)',outline:'none'}} />
+                  {tabSearch && <button onClick={()=>setTabSearch('')} style={{position:'absolute',right:7,
+                    top:'50%',transform:'translateY(-50%)',background:'none',border:'none',
+                    cursor:'pointer',color:'var(--text3)',fontSize:13,lineHeight:1,padding:0}}>×</button>}
+                </div>
             </div>
             {declining.length === 0
               ? <div className="empty-state"><i className="ti ti-trending-down" /><p>{loading ? 'Loading…' : 'No declining SKUs — all items are stable or growing'}</p></div>
@@ -1020,6 +1056,18 @@ export default function Dashboard() {
                           fontFamily:'var(--mono)',fontSize:12,background:'var(--bg2)'}} />
                 <span style={{fontSize:11,color:'var(--text3)'}}>days</span>
                 <span className="card-chip">{forecast.length} skus</span>
+                <div style={{position:'relative',minWidth:200,maxWidth:260}}>
+                  <i className="ti ti-search" style={{position:'absolute',left:8,top:'50%',
+                    transform:'translateY(-50%)',color:'var(--text3)',fontSize:12,pointerEvents:'none'}} />
+                  <input type="text" placeholder="Search SKU or name…" value={tabSearch}
+                    onChange={e => setTabSearch(e.target.value)}
+                    style={{width:'100%',padding:'5px 26px 5px 26px',border:'1px solid var(--border)',
+                      borderRadius:7,fontFamily:'var(--mono)',fontSize:11,background:'var(--bg2)',
+                      color:'var(--text)',outline:'none'}} />
+                  {tabSearch && <button onClick={()=>setTabSearch('')} style={{position:'absolute',right:7,
+                    top:'50%',transform:'translateY(-50%)',background:'none',border:'none',
+                    cursor:'pointer',color:'var(--text3)',fontSize:13,lineHeight:1,padding:0}}>×</button>}
+                </div>
               </div>
             </div>
 
