@@ -595,8 +595,8 @@ export default function Dashboard() {
     });
 
   var pplan_today = poplan.filter(function(r) { return r.urgency === 'today'; });
-  var pplan_7d    = poplan.filter(function(r) { return r.urgency === 'today' || r.urgency === '7d'; });
-  var pplan_15d   = poplan.filter(function(r) { return r.urgency !== 'ok'; });
+  var pplan_7d    = poplan.filter(function(r) { return r.urgency === '7d'; });   // excludes 'today'
+  var pplan_15d   = poplan.filter(function(r) { return r.urgency === '15d'; });  // excludes 'today' and '7d'
 
   // Group by vendor for vendor view
   var poplanByVendor = {};
