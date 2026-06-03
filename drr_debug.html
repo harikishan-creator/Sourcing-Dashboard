@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>DRR Column Debug</title>
+<style>
+body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #00ff00; }
+button { background: #333; color: #0f0; border: 1px solid #0f0; padding: 10px 20px; cursor: pointer; margin: 5px; }
+pre { background: #0a0a0a; padding: 15px; border: 1px solid #333; overflow-x: auto; max-height: 400px; overflow-y: auto; }
+.err { color: #f00; }
+</style>
+</head>
+<body>
+<h2>🔍 DRR Export Column Inspector</h2>
+<button onclick="run()">▶ Trigger drr30 for MSKT_FZP + inspect columns</button>
+<div id="out"><pre>Click button to start...</pre></div>
+<script>
+async function post(body) {
+  const r = await fetch('/api/uniware', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  return r.json();
+}
+async function run() {
+  const out = document.getElementById('out');
+  const log = msg => { out.innerHTML = '<pre>' + (out.querySelector('pre').textContent + '\n' + msg) + '</pre>'; };
+  
+  log('1. Triggering drr30 export for MSKT_FZP...');
+  const t = await post({action:'trigger', type:'drr30', facility:'MSKT_FZP'});
+  log('   jobCode: ' + JSON.stringify(t));
+  
+  if (!t.jobCode) { log('ERROR: no jobCode'); return; }
+  
+  log('2. Polling...');
+  let url = null;
+  for (let i=0; i<15; i++) {
+    await new Promise(r=>setTimeout(r,3000));
+    const p = await post({action:'poll', jobCode:t.jobCode, facility:'MSKT_FZP'});
+    log('   poll ' + (i+1) + ': ' + JSON.stringify(p));
+    if (p.status === 'DONE') { url = p.url; break; }
+    if (p.status === 'FAILED') { log('FAILED'); return; }
+  }
+  
+  if (!url) { log('TIMEOUT'); return; }
+  
+  log('3. Downloading first rows...');
+  const d = await post({action:'download', url});
+  if (!d.rows || !d.rows.length) { log('No rows: ' + JSON.stringify(d)); return; }
+  
+  log('\n=== COLUMNS (' + d.rows.length + ' rows total) ===');
+  const cols = Object.keys(d.rows[0]);
+  cols.forEach((c,i) => log('  ' + i + '. ' + c));
+  
+  log('\n=== SAMPLE ROW 0 ===');
+  log(JSON.stringify(d.rows[0], null, 2));
+  
+  log('\n=== SAMPLE ROW 1 ===');
+  log(JSON.stringify(d.rows[1], null, 2));
+}
+</script>
+</body>
+</html>
