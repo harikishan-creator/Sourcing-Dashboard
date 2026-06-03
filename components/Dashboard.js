@@ -256,6 +256,7 @@ export default function Dashboard() {
             primaryVendor: (r['Primary Vendor']||'').trim(),
             secondaryVendor: (r['Secondary Vendor']||'').trim(),
             poc: (r['POC']||'').trim(),
+            needAfterOpenPO: Math.max(0, num(r['Need After Open Po'] || r['Need After Open PO'] || 0)),
           });
         });
         setInv(Array.from(skuMap.values()).map(r => ({
@@ -564,10 +565,23 @@ export default function Dashboard() {
       var targetStock = drrMax * TARGET_DAYS;
       var poNeeded   = Math.max(0, Math.ceil(targetStock - inv - openPO));
       var doc        = drrMax > 0 ? Math.round(inv / drrMax * 10) / 10 : 999;
-      var urgency    = doc <= 0 ? 'today' : doc <= 7 ? '7d' : doc <= 15 ? '15d' : 'ok';
+      // needAfterOpenPO: units still needed after open PO to hit 45d target
+      var needAfterOpenPO = r.needAfterOpenPO !== undefined
+        ? r.needAfterOpenPO
+        : Math.max(0, targetStock - inv - openPO);
+      var hasOpenPO = openPO > 0;
+      // Conditions: lead time = 10d, no open PO, and still short of 45d target
+      // Order Today  = DOC <= 10 AND no open PO AND still need stock
+      // Next 7 days  = DOC <= 17 (10+7) AND no open PO AND still need stock
+      // Next 15 days = DOC <= 25 (10+15) AND no open PO AND still need stock
+      var needsOrder = needAfterOpenPO > 0;
+      var urgency = (!hasOpenPO && needsOrder && doc <= 10) ? 'today'
+                  : (!hasOpenPO && needsOrder && doc <= 17) ? '7d'
+                  : (!hasOpenPO && needsOrder && doc <= 25) ? '15d'
+                  : 'ok';
       return Object.assign({}, r, { wdrr, drrMax, inv, openPO, vendor, targetStock, poNeeded, doc, urgency });
     })
-    .filter(function(r) { return r.poNeeded > 0; })
+    .filter(function(r) { return r.poNeeded > 0 && r.urgency !== 'ok'; })
     .sort(function(a, b) {
       var o = { today:0, '7d':1, '15d':2, ok:3 };
       return (o[a.urgency]||3) - (o[b.urgency]||3) || a.doc - b.doc;
@@ -1412,10 +1426,10 @@ export default function Dashboard() {
                   <i className="ti ti-alert-circle" style={{fontSize:18,color:'var(--red)'}} />
                   <div>
                     <div style={{fontSize:13,fontWeight:600,color:'var(--red)'}}>
-                      {pplan_today.length} SKUs need to be ordered TODAY to maintain 45-day stock target
+                      {pplan_today.length} SKUs must be ordered TODAY — DOC ≤ 10d, no open PO, stock needed
                     </div>
                     <div style={{fontSize:11,color:'var(--text2)',marginTop:2}}>
-                      Inventory cover = 0 days · Total PO qty: {pplan_today.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
+                      DOC ≤ 10d, no open PO, still need stock · Total PO qty: {pplan_today.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
                     </div>
                   </div>
                 </div>
@@ -1431,10 +1445,10 @@ export default function Dashboard() {
                   <i className="ti ti-clock" style={{fontSize:18,color:'var(--amber)'}} />
                   <div>
                     <div style={{fontSize:13,fontWeight:600,color:'var(--amber)'}}>
-                      {pplan_7d.length} SKUs will need ordering within the next 7 days
+                      {pplan_7d.length} SKUs — stock runs out within 17 days (10d lead + 7d), no open PO
                     </div>
                     <div style={{fontSize:11,color:'var(--text2)',marginTop:2}}>
-                      Inventory cover ≤ 7 days · Total PO qty: {pplan_7d.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
+                      DOC ≤ 17d (lead 10d + 7d), no open PO, still need stock · Total PO qty: {pplan_7d.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
                     </div>
                   </div>
                 </div>
@@ -1450,10 +1464,10 @@ export default function Dashboard() {
                   <i className="ti ti-calendar" style={{fontSize:18,color:'#92400e'}} />
                   <div>
                     <div style={{fontSize:13,fontWeight:600,color:'#92400e'}}>
-                      {pplan_15d.length} SKUs will need ordering within the next 15 days
+                      {pplan_15d.length} SKUs — stock runs out within 25 days (10d lead + 15d), no open PO
                     </div>
                     <div style={{fontSize:11,color:'var(--text2)',marginTop:2}}>
-                      Inventory cover ≤ 15 days · Total PO qty: {pplan_15d.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
+                      DOC ≤ 25d (lead 10d + 15d), no open PO, still need stock · Total PO qty: {pplan_15d.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
                     </div>
                   </div>
                 </div>
