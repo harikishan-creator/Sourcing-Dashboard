@@ -514,7 +514,7 @@ export default function Dashboard() {
 
 
   // Auto-fetch disabled — click 'Refresh from Uniware' manually when MCP token is ready
-  // useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { fetchAll(); }, []); // Auto-fetch on page load
 
   // ── derived data (all in one block to prevent bundler reordering TDZ) ──
   var whitelistedInv = inv.filter(r => SKU_CAT_MAP[r.sku]);
