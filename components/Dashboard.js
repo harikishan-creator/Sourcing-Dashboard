@@ -125,6 +125,75 @@ function POCell({ r, poBySkuMap, onOpen }) {
   return <button className="po-btn-none" onClick={() => onOpen(r.sku, r.name)}>all received</button>;
 }
 
+
+function POPlanTable({ items, showUrgency }) {
+  const fmt = n => Math.round(n).toLocaleString('en-IN');
+  const fmtK = n => n>=100000?(n/100000).toFixed(1)+'L':n>=1000?(n/1000).toFixed(1)+'K':String(Math.round(n));
+  if (!items || items.length === 0) return (
+    <div style={{textAlign:'center',padding:'2rem',color:'var(--text3)',fontSize:13}}>
+      <i className="ti ti-circle-check" style={{fontSize:28,display:'block',marginBottom:8,color:'var(--green)'}} />
+      No orders needed — all items have sufficient stock
+    </div>
+  );
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table className="detail">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>ITEM</th>
+            <th>CAT</th>
+            <th>VENDOR</th>
+            <th className="r">DRR MAX</th>
+            <th className="r">INVENTORY</th>
+            <th className="r">OPEN PO</th>
+            <th className="r" title="Inventory ÷ DRR Max">INV COVER</th>
+            <th className="r" title="DRR Max × 45 days">TARGET (45d)</th>
+            <th className="r" style={{color:'var(--blue)'}}>PO QTY NEEDED</th>
+            {showUrgency && <th>URGENCY</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(function(r, i) {
+            var urgCfg = {
+              today: {bg:'var(--red-dim)',   col:'var(--red)',     label:'🔴 Order Today'},
+              '7d':  {bg:'var(--amber-dim)', col:'var(--amber)',   label:'🟠 Within 7d'},
+              '15d': {bg:'#fef3c7',          col:'#92400e',        label:'🟡 Within 15d'},
+              ok:    {bg:'var(--green-dim)', col:'var(--green)',   label:'🟢 OK'},
+            };
+            var uc = urgCfg[r.urgency] || urgCfg.ok;
+            return (
+              <tr key={i} style={{background: i%2===0?'transparent':'var(--bg3)'}}>
+                <td><span className="sku-badge">{r.sku}</span></td>
+                <td style={{fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}</td>
+                <td style={{color:'var(--text3)',fontSize:11}}>{r.cat}</td>
+                <td style={{color:'var(--text2)',fontSize:11,maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={r.vendor}>{r.vendor}</td>
+                <td className="r" style={{fontFamily:'var(--mono)',color:'var(--text2)'}}>{fmt(r.drrMax)}</td>
+                <td className="r" style={{fontFamily:'var(--mono)',color: r.inv===0?'var(--red)':'var(--text)'}}>{fmt(r.inv)}</td>
+                <td className="r" style={{fontFamily:'var(--mono)',color:'var(--blue)'}}>{fmt(r.openPO)}</td>
+                <td className="r"><span style={{fontFamily:'var(--mono)',fontWeight:600,
+                    color:r.doc<=7?'var(--red)':r.doc<=15?'var(--amber)':'var(--text2)'}}>{r.doc}d</span></td>
+                <td className="r" style={{fontFamily:'var(--mono)',color:'var(--text3)'}}>{fmt(r.targetStock)}</td>
+                <td className="r">
+                  <span style={{fontFamily:'var(--mono)',fontWeight:700,fontSize:13,
+                      background:'var(--blue-dim)',color:'var(--blue)',
+                      border:'1px solid var(--blue-mid)',borderRadius:5,padding:'2px 8px'}}>
+                    {fmtK(r.poNeeded)}
+                  </span>
+                </td>
+                {showUrgency && (
+                  <td><span style={{background:uc.bg,color:uc.col,padding:'2px 8px',
+                      borderRadius:4,fontSize:10,fontWeight:600,whiteSpace:'nowrap'}}>{uc.label}</span></td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── main component ────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [inv,       setInv]       = useState([]);
@@ -138,6 +207,8 @@ export default function Dashboard() {
   const [activeTab,   setActiveTab]   = useState('doc');
   const [leadDays,    setLeadDays]    = useState(LEAD_DAYS_DEFAULT);
   const [forecastFilter, setForecastFilter] = useState('');
+  const [forecastSubTab, setForecastSubTab] = useState('table'); // 'table' | 'vendor' | 'today' | '7d' | '15d'
+  const TARGET_DAYS = 45; // 45-day stock target for PO planning
   const [docFilter,      setDocFilter]      = useState(''); // 'procure_now'|'procure'|'overstock'|'deadstock' // urgency or trend filter
   const [tabSearch,   setTabSearch]   = useState('');
   const [catFilter,   setCatFilter]   = useState('');
@@ -472,6 +543,46 @@ export default function Dashboard() {
       var o = { stockout:0, overdue:1, urgent:2, soon:3, ok:4, no_sales:5 };
       return (o[a.urgency]||4) - (o[b.urgency]||4) || (a.daysLeft||999) - (b.daysLeft||999);
     });
+  // ── PO Plan data (45-day target) ───────────────────────────────────────────
+  var poplan = whitelistedInv
+    .filter(function(r) { return r.drr30 > 0 || r.drr7 > 0; })
+    .map(function(r) {
+      var wdrr       = weightedDRR(r);
+      var drrMax     = r.drrMax || wdrr;
+      var inv        = r.inv || 0;
+      var openPO     = (poBySkuMap[r.sku] || [])
+        .filter(function(p) { return p.pending > 0 && p.status !== 'CLOSED' && p.status !== 'CANCELLED'; })
+        .reduce(function(s, p) { return s + p.pending; }, 0);
+      var vendor     = (poBySkuMap[r.sku] && poBySkuMap[r.sku][0]) ? poBySkuMap[r.sku][0].vendor : (r.vendor || '');
+      if (!vendor || vendor === '—') vendor = 'Unknown Vendor';
+      var targetStock = drrMax * TARGET_DAYS;
+      var poNeeded   = Math.max(0, Math.ceil(targetStock - inv - openPO));
+      var doc        = drrMax > 0 ? Math.round(inv / drrMax * 10) / 10 : 999;
+      var urgency    = doc <= 0 ? 'today' : doc <= 7 ? '7d' : doc <= 15 ? '15d' : 'ok';
+      return Object.assign({}, r, { wdrr, drrMax, inv, openPO, vendor, targetStock, poNeeded, doc, urgency });
+    })
+    .filter(function(r) { return r.poNeeded > 0; })
+    .sort(function(a, b) {
+      var o = { today:0, '7d':1, '15d':2, ok:3 };
+      return (o[a.urgency]||3) - (o[b.urgency]||3) || a.doc - b.doc;
+    });
+
+  var pplan_today = poplan.filter(function(r) { return r.urgency === 'today'; });
+  var pplan_7d    = poplan.filter(function(r) { return r.urgency === 'today' || r.urgency === '7d'; });
+  var pplan_15d   = poplan.filter(function(r) { return r.urgency !== 'ok'; });
+
+  // Group by vendor for vendor view
+  var poplanByVendor = {};
+  poplan.forEach(function(r) {
+    if (!poplanByVendor[r.vendor]) poplanByVendor[r.vendor] = [];
+    poplanByVendor[r.vendor].push(r);
+  });
+  var vendorsSorted = Object.keys(poplanByVendor).sort(function(a, b) {
+    var minA = Math.min.apply(null, poplanByVendor[a].map(function(r) { return r.doc; }));
+    var minB = Math.min.apply(null, poplanByVendor[b].map(function(r) { return r.doc; }));
+    return minA - minB;
+  });
+
   var pn  = whitelistedInv.filter(r => r.doc === 0 && r.inv === 0).length;
   var pc  = whitelistedInv.filter(r => r.doc > 0 && r.doc <= 15).length;
   var ovs = whitelistedInv.filter(r => r.doc > 60 && r.doc <= 180).length;
@@ -1043,34 +1154,72 @@ export default function Dashboard() {
             <div className="card-head" style={{flexWrap:'wrap',gap:8}}>
               <span className="card-title">
                 <i className="ti ti-crystal-ball" style={{fontSize:15,color:'var(--purple)'}} />
-                Inventory Forecast
-                <span style={{fontSize:11,color:'var(--text3)',fontWeight:400,marginLeft:8}}>
-                  30-day weighted DRR · 60-day need horizon
-                </span>
+                Inventory Forecast & PO Planner
               </span>
               <div style={{display:'flex',alignItems:'center',gap:8,marginLeft:'auto',flexWrap:'wrap'}}>
-                <span style={{fontSize:11,color:'var(--text3)'}}>Lead time:</span>
-                <input type="number" min="1" max="90" value={leadDays}
-                  onChange={e => setLeadDays(Math.max(1, parseInt(e.target.value)||7))}
-                  style={{width:52,padding:'3px 6px',border:'1px solid var(--border)',borderRadius:6,
-                          fontFamily:'var(--mono)',fontSize:12,background:'var(--bg2)'}} />
-                <span style={{fontSize:11,color:'var(--text3)'}}>days</span>
-                <span className="card-chip">{forecast.length} skus</span>
-                <div style={{position:'relative',minWidth:200,maxWidth:260}}>
-                  <i className="ti ti-search" style={{position:'absolute',left:8,top:'50%',
-                    transform:'translateY(-50%)',color:'var(--text3)',fontSize:12,pointerEvents:'none'}} />
-                  <input type="text" placeholder="Search SKU or name…" value={tabSearch}
-                    onChange={e => setTabSearch(e.target.value)}
-                    style={{width:'100%',padding:'5px 26px 5px 26px',border:'1px solid var(--border)',
-                      borderRadius:7,fontFamily:'var(--mono)',fontSize:11,background:'var(--bg2)',
-                      color:'var(--text)',outline:'none'}} />
-                  {tabSearch && <button onClick={()=>setTabSearch('')} style={{position:'absolute',right:7,
-                    top:'50%',transform:'translateY(-50%)',background:'none',border:'none',
-                    cursor:'pointer',color:'var(--text3)',fontSize:13,lineHeight:1,padding:0}}>×</button>}
-                </div>
+                {forecastSubTab === 'table' && <>
+                  <span style={{fontSize:11,color:'var(--text3)'}}>Lead time:</span>
+                  <input type="number" min="1" max="90" value={leadDays}
+                    onChange={e => setLeadDays(Math.max(1, parseInt(e.target.value)||7))}
+                    style={{width:52,padding:'3px 6px',border:'1px solid var(--border)',borderRadius:6,
+                            fontFamily:'var(--mono)',fontSize:12,background:'var(--bg2)'}} />
+                  <span style={{fontSize:11,color:'var(--text3)'}}>days</span>
+                  <span className="card-chip">{forecast.length} skus</span>
+                </>}
+                {forecastSubTab === 'vendor' && <span className="card-chip">{vendorsSorted.length} vendors · {poplan.length} SKUs</span>}
+                {forecastSubTab === 'today' && <span className="card-chip" style={{background:'var(--red-dim)',color:'var(--red)',border:'1px solid var(--red-mid)'}}>{pplan_today.length} SKUs · order today</span>}
+                {forecastSubTab === '7d'    && <span className="card-chip" style={{background:'var(--amber-dim)',color:'var(--amber)',border:'1px solid var(--amber-mid)'}}>{pplan_7d.length} SKUs · within 7 days</span>}
+                {forecastSubTab === '15d'   && <span className="card-chip" style={{background:'#fef3c7',color:'#92400e',border:'1px solid #fde68a'}}>{pplan_15d.length} SKUs · within 15 days</span>}
+                {(forecastSubTab === 'table') && (
+                  <div style={{position:'relative',minWidth:200,maxWidth:260}}>
+                    <i className="ti ti-search" style={{position:'absolute',left:8,top:'50%',
+                      transform:'translateY(-50%)',color:'var(--text3)',fontSize:12,pointerEvents:'none'}} />
+                    <input type="text" placeholder="Search SKU or name…" value={tabSearch}
+                      onChange={e => setTabSearch(e.target.value)}
+                      style={{width:'100%',padding:'5px 26px 5px 26px',border:'1px solid var(--border)',
+                        borderRadius:7,fontFamily:'var(--mono)',fontSize:11,background:'var(--bg2)',
+                        color:'var(--text)',outline:'none'}} />
+                    {tabSearch && <button onClick={()=>setTabSearch('')} style={{position:'absolute',right:7,
+                      top:'50%',transform:'translateY(-50%)',background:'none',border:'none',
+                      cursor:'pointer',color:'var(--text3)',fontSize:13,lineHeight:1,padding:0}}>×</button>}
+                  </div>
+                )}
               </div>
             </div>
 
+            {/* Sub-tabs */}
+            <div style={{display:'flex',gap:0,borderBottom:'2px solid var(--border)',marginBottom:14,overflowX:'auto'}}>
+              {[
+                {id:'table',  icon:'ti-table',        label:'Forecast Table'},
+                {id:'vendor', icon:'ti-building-store',label:'Vendor-wise PO View'},
+                {id:'today',  icon:'ti-alert-circle',  label:'Order Today',  count:pplan_today.length, col:'var(--red)'},
+                {id:'7d',     icon:'ti-clock',         label:'Next 7 Days',  count:pplan_7d.length,    col:'var(--amber)'},
+                {id:'15d',    icon:'ti-calendar',      label:'Next 15 Days', count:pplan_15d.length,   col:'#92400e'},
+              ].map(function(t) {
+                var isActive = forecastSubTab === t.id;
+                return (
+                  <button key={t.id} onClick={() => setForecastSubTab(t.id)}
+                    style={{display:'flex',alignItems:'center',gap:6,padding:'8px 16px',border:'none',
+                      background:'transparent',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:500,
+                      color: isActive ? (t.col||'var(--blue)') : 'var(--text3)',
+                      borderBottom: isActive ? ('2px solid '+(t.col||'var(--blue)')) : '2px solid transparent',
+                      marginBottom:-2,whiteSpace:'nowrap',transition:'all .15s'}}>
+                    <i className={'ti '+t.icon} style={{fontSize:13}} />
+                    {t.label}
+                    {t.count !== undefined && (
+                      <span style={{background:isActive?(t.col||'var(--blue)'):'var(--bg3)',
+                        color:isActive?'#fff':(t.col||'var(--text2)'),
+                        borderRadius:10,padding:'1px 7px',fontSize:10,fontWeight:700}}>
+                        {t.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* ── SUB-TAB: FORECAST TABLE ── */}
+            {forecastSubTab === 'table' && (<>
             {/* Summary strip */}
             <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
               {[
@@ -1206,6 +1355,106 @@ export default function Dashboard() {
                   </table>
                 </div>
               )}
+            </>)}
+
+            {/* ── SUB-TAB: VENDOR-WISE PO VIEW ── */}
+            {forecastSubTab === 'vendor' && (
+              <div>
+                <div style={{background:'var(--blue-dim)',border:'1px solid rgba(26,95,165,.2)',borderRadius:8,
+                    padding:'8px 14px',marginBottom:14,fontSize:11,color:'var(--blue)',lineHeight:1.6}}>
+                  <strong>PO Planning (45-day target):</strong>
+                  &nbsp;PO Qty = max(0, DRR Max × 45 − Inventory − Open PO) &nbsp;·&nbsp;
+                  Items grouped by Primary Vendor &nbsp;·&nbsp; Sorted by most critical first
+                </div>
+                {vendorsSorted.length === 0
+                  ? <div className="empty-state"><i className="ti ti-building-store" /><p>No POs needed — all items covered</p></div>
+                  : vendorsSorted.map(function(vendor) {
+                    var vitems = poplanByVendor[vendor];
+                    var totalQty = vitems.reduce(function(s,r){return s+r.poNeeded;},0);
+                    var critCount = vitems.filter(function(r){return r.urgency==='today';}).length;
+                    var fmt = function(n){return Math.round(n).toLocaleString('en-IN');};
+                    var fmtK = function(n){return n>=100000?(n/100000).toFixed(1)+'L':n>=1000?(n/1000).toFixed(1)+'K':String(Math.round(n));};
+                    return (
+                      <div key={vendor} style={{marginBottom:12,border:'1px solid var(--border)',borderRadius:10,overflow:'hidden'}}>
+                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+                            background:'var(--bg3)',padding:'10px 14px',borderBottom:'1px solid var(--border)'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:10}}>
+                            <i className="ti ti-building-store" style={{fontSize:14,color:'var(--blue)'}} />
+                            <div>
+                              <div style={{fontWeight:600,fontSize:13,color:'var(--text)'}}>{vendor}</div>
+                              <div style={{fontSize:11,color:'var(--text3)'}}>{vitems.length} SKU{vitems.length!==1?'s':''}{critCount>0 && <span style={{color:'var(--red)',fontWeight:600,marginLeft:6}}>· {critCount} critical today</span>}</div>
+                            </div>
+                          </div>
+                          <div style={{display:'flex',alignItems:'center',gap:10}}>
+                            {critCount>0 && <span style={{background:'var(--red-dim)',color:'var(--red)',border:'1px solid var(--red-mid)',borderRadius:5,padding:'3px 10px',fontSize:11,fontWeight:600}}>🔴 {critCount} today</span>}
+                            <span style={{background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid var(--blue-mid)',borderRadius:5,padding:'3px 10px',fontSize:12,fontWeight:700}}>PO qty: {fmtK(totalQty)}</span>
+                          </div>
+                        </div>
+                        <POPlanTable items={vitems} showUrgency={true} />
+                      </div>
+                    );
+                  })
+                }
+              </div>
+            )}
+
+            {/* ── SUB-TAB: ORDER TODAY ── */}
+            {forecastSubTab === 'today' && (
+              <div>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,padding:'10px 14px',
+                    background:'var(--red-dim)',border:'1px solid var(--red-mid)',borderRadius:8}}>
+                  <i className="ti ti-alert-circle" style={{fontSize:18,color:'var(--red)'}} />
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:'var(--red)'}}>
+                      {pplan_today.length} SKUs need to be ordered TODAY to maintain 45-day stock target
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',marginTop:2}}>
+                      Inventory cover = 0 days · Total PO qty: {pplan_today.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
+                    </div>
+                  </div>
+                </div>
+                <POPlanTable items={pplan_today} showUrgency={false} />
+              </div>
+            )}
+
+            {/* ── SUB-TAB: NEXT 7 DAYS ── */}
+            {forecastSubTab === '7d' && (
+              <div>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,padding:'10px 14px',
+                    background:'var(--amber-dim)',border:'1px solid var(--amber-mid)',borderRadius:8}}>
+                  <i className="ti ti-clock" style={{fontSize:18,color:'var(--amber)'}} />
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:'var(--amber)'}}>
+                      {pplan_7d.length} SKUs will need ordering within the next 7 days
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',marginTop:2}}>
+                      Inventory cover ≤ 7 days · Total PO qty: {pplan_7d.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
+                    </div>
+                  </div>
+                </div>
+                <POPlanTable items={pplan_7d} showUrgency={true} />
+              </div>
+            )}
+
+            {/* ── SUB-TAB: NEXT 15 DAYS ── */}
+            {forecastSubTab === '15d' && (
+              <div>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,padding:'10px 14px',
+                    background:'#fef3c7',border:'1px solid #fde68a',borderRadius:8}}>
+                  <i className="ti ti-calendar" style={{fontSize:18,color:'#92400e'}} />
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:'#92400e'}}>
+                      {pplan_15d.length} SKUs will need ordering within the next 15 days
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text2)',marginTop:2}}>
+                      Inventory cover ≤ 15 days · Total PO qty: {pplan_15d.reduce(function(s,r){return s+r.poNeeded;},0).toLocaleString('en-IN')} units
+                    </div>
+                  </div>
+                </div>
+                <POPlanTable items={pplan_15d} showUrgency={true} />
+              </div>
+            )}
+
           </div>
         )}
 
