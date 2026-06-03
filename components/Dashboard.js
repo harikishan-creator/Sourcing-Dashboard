@@ -426,16 +426,21 @@ export default function Dashboard() {
       }
 
       // Step 4: Calculate DRR & DOC
-      // calcDRR: counts rows per SKU within a date window
+      // calcDRR: sums ORDERED QUANTITY per SKU within date window (not row count)
       const calcDRR = (rows, days) => {
         const cutoff = Date.now() - days * 86400000;
         const c = {};
         (rows||[]).forEach(r => {
           const s = (r['Item SKU Code']||r['Item SkuCode']||'').trim();
           if (!s) return;
-          // Filter by Created date for window-specific DRR
           const created = r['Created'] ? new Date(r['Created']).getTime() : 0;
-          if (created >= cutoff) c[s] = (c[s]||0) + 1;
+          if (created >= cutoff) {
+            const qty = parseFloat(
+              r['Ordered Quantity'] || r['Total Quantity'] ||
+              r['ordered_quantity'] || r['Quantity'] || 1
+            ) || 1;
+            c[s] = (c[s]||0) + qty;
+          }
         });
         const d = {};
         Object.entries(c).forEach(([s,t]) => { d[s] = rnd(t/days); });
