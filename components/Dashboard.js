@@ -353,8 +353,8 @@ export default function Dashboard() {
         const { jobCode, error: e } = await t.json();
         if (e || !jobCode) return [];
         // Poll every 2s, max 10 attempts = 20s max per job
-        for (let i = 0; i < 10; i++) {
-          await new Promise(r => setTimeout(r, 2000));
+        for (let i = 0; i < 25; i++) {
+          await new Promise(r => setTimeout(r, 8000));
           const p = await fetch('/api/uniware', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'poll', jobCode, facility }),
@@ -374,23 +374,18 @@ export default function Dashboard() {
       return [];
     };
 
-    // Run all jobs in PARALLEL — all facilities at the same time
-    const runJobsParallel = async (type, facilities) => {
-      const results = await Promise.all(facilities.map(fac => runJob(type, fac)));
-      const map = {};
-      facilities.forEach((fac, i) => { map[fac] = results[i]; });
-      return map;
-    };
-
     try {
-      // Step 1 + 2: Inventory AND DRR in parallel across all facilities
-      showToast('⚡ Fetching all data in parallel…', 'info');
-      const [invData, drr30Data] = await Promise.all([
-        runJobsParallel('inventory', FACILITIES),
-        runJobsParallel('drr30', FACILITIES),
-      ]);
+      // Step 1: Inventory snapshots — sequential
+      showToast('Fetching inventory…', 'info');
+      const invData = {};
+      for (const fac of FACILITIES) invData[fac] = await runJob('inventory', fac);
 
-      // Step 3: PO - full fetch or from cache (2 facilities in parallel)
+      // Step 2: DRR 30d export — sequential
+      showToast('Fetching 30d sales…', 'info');
+      const drr30Data = {};
+      for (const fac of FACILITIES) drr30Data[fac] = await runJob('drr30', fac);
+
+      // Step 3: PO — full fetch or from cache
       let poBySkuMapNew = {};
       let cachedPO = {};
       try {
@@ -401,8 +396,8 @@ export default function Dashboard() {
       if (needFull) {
         showToast('Fetching POs…', 'info');
         const PO_FACILITIES = ['astrotalk', 'MSKT_FZP'];
-        const poResults = await runJobsParallel('po', PO_FACILITIES);
         for (const fac of PO_FACILITIES) {
+          const rows = await runJob('po', fac);
           const rows = poResults[fac];
           (rows || []).forEach(r => {
             const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
