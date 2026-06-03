@@ -730,7 +730,7 @@ export default function Dashboard() {
         </div>
 
         {/* ERROR STRIP */}
-        {Object.values(errors).some(Boolean) && inv.length === 0 && (
+        {Object.values(errors).some(Boolean) && inv.length === 0 && activeTab !== 'forecast' && (
           <div className="error-strip">
             <i className="ti ti-alert-triangle" style={{ fontSize: 14 }} />
             <span>Partial data: {Object.entries(errors).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>
@@ -738,14 +738,14 @@ export default function Dashboard() {
         )}
 
         {/* SKELETON / LOADING */}
-        {loading && inv.length === 0 && (
+        {loading && inv.length === 0 && activeTab !== 'forecast' && (
           <div className="skeleton-wrap">
             {[...Array(6)].map((_, i) => <div key={i} className="skeleton-card" />)}
           </div>
         )}
 
         {/* METRICS */}
-        {inv.length > 0 && (
+        {inv.length > 0 && activeTab !== 'forecast' && (
           <div className="metrics">
             {[
               { lbl: 'Procure now',          val: pn,  sub: 'doc=0 · no stock',  cls: 'c-red',    icon: 'ti-alert-circle',   tab: 'doc',     docFilter: 'procure_now' },
