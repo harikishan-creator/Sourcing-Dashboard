@@ -669,7 +669,7 @@ export default function Dashboard() {
         </div>
 
         {/* SEARCH BAR */}
-        {['doc','spikes','declining','forecast'].includes(activeTab) && (
+        {['doc','spikes','declining'].includes(activeTab) && (
           <div style={{position:'relative',marginBottom:'0.5rem',maxWidth:340}}>
             <i className="ti ti-search" style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',
               color:'var(--text3)',fontSize:13,pointerEvents:'none'}} />
