@@ -253,6 +253,9 @@ export default function Dashboard() {
             sku, name:(r['Item Type Name']||sku).trim(), cat:SKU_CAT_MAP[sku]||r['Category']||'Uncategorised',
             drr7:Math.round(num(r['Last 7 days DRR'])), drr15:Math.round(num(r['Last 15 days DRR'])), drr30:Math.round(num(r['Last 30 days DRR'])),
             drrMax:Math.round(num(r['DRR Max'])), inv:num(r['Inventory']), openPO:num(r['Open Purchase']), doc:Math.round(num(r['Days of Cover'])),
+            primaryVendor: (r['Primary Vendor']||'').trim(),
+            secondaryVendor: (r['Secondary Vendor']||'').trim(),
+            poc: (r['POC']||'').trim(),
           });
         });
         setInv(Array.from(skuMap.values()).map(r => ({
@@ -553,8 +556,11 @@ export default function Dashboard() {
       var openPO     = (poBySkuMap[r.sku] || [])
         .filter(function(p) { return p.pending > 0 && p.status !== 'CLOSED' && p.status !== 'CANCELLED'; })
         .reduce(function(s, p) { return s + p.pending; }, 0);
-      var vendor     = (poBySkuMap[r.sku] && poBySkuMap[r.sku][0]) ? poBySkuMap[r.sku][0].vendor : (r.vendor || '');
-      if (!vendor || vendor === '—') vendor = 'Unknown Vendor';
+      // Vendor priority: inventory sheet Primary Vendor → PO data vendor → Secondary Vendor
+      var vendor = (r.primaryVendor && r.primaryVendor !== '—' && r.primaryVendor !== '') ? r.primaryVendor
+                 : (poBySkuMap[r.sku] && poBySkuMap[r.sku][0] && poBySkuMap[r.sku][0].vendor !== '—') ? poBySkuMap[r.sku][0].vendor
+                 : (r.secondaryVendor && r.secondaryVendor !== '') ? r.secondaryVendor
+                 : 'No Vendor Data';
       var targetStock = drrMax * TARGET_DAYS;
       var poNeeded   = Math.max(0, Math.ceil(targetStock - inv - openPO));
       var doc        = drrMax > 0 ? Math.round(inv / drrMax * 10) / 10 : 999;
