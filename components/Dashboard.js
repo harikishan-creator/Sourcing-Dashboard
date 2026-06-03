@@ -343,7 +343,7 @@ export default function Dashboard() {
 
     showToast(needFull ? '📦 Full fetch (30d DRR)…' : '⚡ Delta fetch (48h)…', 'info');
 
-    // Helper: trigger → poll → download one job
+    // Helper: trigger → poll → download one job (with 2s poll interval for speed)
     const runJob = async (type, facility) => {
       try {
         const t = await fetch('/api/uniware', {
@@ -352,8 +352,9 @@ export default function Dashboard() {
         });
         const { jobCode, error: e } = await t.json();
         if (e || !jobCode) return [];
-        for (let i = 0; i < 25; i++) {
-          await new Promise(r => setTimeout(r, 8000));
+        // Poll every 2s, max 10 attempts = 20s max per job
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 2000));
           const p = await fetch('/api/uniware', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'poll', jobCode, facility }),
@@ -373,22 +374,23 @@ export default function Dashboard() {
       return [];
     };
 
+    // Run all jobs in PARALLEL — all facilities at the same time
+    const runJobsParallel = async (type, facilities) => {
+      const results = await Promise.all(facilities.map(fac => runJob(type, fac)));
+      const map = {};
+      facilities.forEach((fac, i) => { map[fac] = results[i]; });
+      return map;
+    };
+
     try {
-      // Step 1: Always get inventory snapshots
-      showToast('Fetching inventory…', 'info');
-      const invData = {};
-      for (const fac of FACILITIES) invData[fac] = await runJob('inventory', fac);
+      // Step 1 + 2: Inventory AND DRR in parallel across all facilities
+      showToast('⚡ Fetching all data in parallel…', 'info');
+      const [invData, drr30Data] = await Promise.all([
+        runJobsParallel('inventory', FACILITIES),
+        runJobsParallel('drr30', FACILITIES),
+      ]);
 
-      // Step 2: DRR - full (7d+15d+30d) or delta (48h)
-      showToast(needFull ? 'Fetching 7d/15d/30d sales…' : 'Fetching 48h delta…', 'info');
-      // Optimized: fetch only 30d export per facility (was 3 jobs per facility)
-      // 7d and 15d DRR derived by filtering rows by 'Created' date — saves 8 jobs
-      const drr30Data = {};
-      for (const fac of FACILITIES) {
-        drr30Data[fac] = await runJob('drr30', fac);
-      }
-
-      // Step 3: PO - full fetch or from cache
+      // Step 3: PO - full fetch or from cache (2 facilities in parallel)
       let poBySkuMapNew = {};
       let cachedPO = {};
       try {
@@ -398,10 +400,11 @@ export default function Dashboard() {
 
       if (needFull) {
         showToast('Fetching POs…', 'info');
-        const PO_FACILITIES = ['astrotalk', 'MSKT_FZP']; // POs only from these 2 facilities
+        const PO_FACILITIES = ['astrotalk', 'MSKT_FZP'];
+        const poResults = await runJobsParallel('po', PO_FACILITIES);
         for (const fac of PO_FACILITIES) {
-          const rows = await runJob('po', fac);
-          rows.forEach(r => {
+          const rows = poResults[fac];
+          (rows || []).forEach(r => {
             const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
             if (!sku) return;
             if (!poBySkuMapNew[sku]) poBySkuMapNew[sku] = [];
