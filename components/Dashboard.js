@@ -460,12 +460,19 @@ export default function Dashboard() {
             const e = skuMap.get(sku);
             e.inv += inv;
             e.openPO += parseFloat(r['Open Purchase']||0);
+            // Update vendor fields if not yet set
+            if (!e.primaryVendor) e.primaryVendor = (r['Primary Vendor']||'').trim();
+            if (!e.needAfterOpenPO) e.needAfterOpenPO = Math.max(0, parseFloat(r['Need After Open Po']||r['Need After Open PO']||0));
           } else {
             skuMap.set(sku, {
               sku, name:(r['Item Type Name']||sku).trim(),
               cat: SKU_CAT_MAP[sku], inv,
               openPO:parseFloat(r['Open Purchase']||0),
               drr7:0, drr15:0, drr30:0, drrMax:0, doc:0,
+              primaryVendor:   (r['Primary Vendor']||'').trim(),
+              secondaryVendor: (r['Secondary Vendor']||'').trim(),
+              poc:             (r['POC']||'').trim(),
+              needAfterOpenPO: Math.max(0, parseFloat(r['Need After Open Po']||r['Need After Open PO']||0)),
             });
           }
         });
