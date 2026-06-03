@@ -398,7 +398,6 @@ export default function Dashboard() {
         const PO_FACILITIES = ['astrotalk', 'MSKT_FZP'];
         for (const fac of PO_FACILITIES) {
           const rows = await runJob('po', fac);
-          const rows = poResults[fac];
           (rows || []).forEach(r => {
             const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
             if (!sku) return;
