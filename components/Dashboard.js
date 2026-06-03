@@ -217,6 +217,9 @@ export default function Dashboard() {
   const [skuPanel,    setSkuPanel]    = useState(null);  // { cat, bucketIdx }
   const [poPanel,     setPoPanel]     = useState(null);  // { sku, name }
   const [toast,       setToast]       = useState(null);
+  const [dataSource,  setDataSource]  = useState('mcp');   // 'mcp' | 'csv'
+  const [invLoaded,   setInvLoaded]   = useState(false);
+  const [poLoaded,    setPoLoaded]    = useState(false);
 
   // ── toast ──
   const showToast = useCallback((msg, type = 'ok') => {
@@ -225,6 +228,95 @@ export default function Dashboard() {
   }, []);
 
 
+
+  // ── CSV helpers (fallback when MCP is unavailable) ─────────────────────────
+  function parseCSV(text) {
+    const lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim().split('\n');
+    if (lines.length < 2) return [];
+    function parseLine(line) {
+      const vals=[]; let cur='',inQ=false,i=0;
+      while(i<line.length){const ch=line[i];if(ch==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i+=2;continue;}inQ=!inQ;}else if(ch===','&&!inQ){vals.push(cur);cur='';}else cur+=ch;i++;}
+      vals.push(cur); return vals;
+    }
+    const headers=parseLine(lines[0]).map(h=>h.trim());
+    return lines.slice(1).filter(l=>l.trim()).map(line=>{
+      const vals=parseLine(line);const obj={};
+      headers.forEach((h,i)=>{obj[h]=(vals[i]??'').trim();});
+      return obj;
+    });
+  }
+
+  function handleInvCSV(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const rows = parseCSV(e.target.result);
+        const skuMap = new Map();
+        rows.forEach(r => {
+          const sku = (r['Item SKU Code']||'').trim();
+          if (!sku) return;
+          skuMap.set(sku, {
+            sku, name:(r['Item Type Name']||sku).trim(), cat:SKU_CAT_MAP[sku]||r['Category']||'Uncategorised',
+            drr7:Math.round(num(r['Last 7 days DRR']||0)),
+            drr15:Math.round(num(r['Last 15 days DRR']||0)),
+            drr30:Math.round(num(r['Last 30 days DRR']||0)),
+            inv:num(r['Inventory']||0), openPO:num(r['Open Purchase']||0),
+            doc:Math.round(num(r['Days of Cover']||0)),
+            primaryVendor:(r['Primary Vendor']||'').trim(),
+            secondaryVendor:(r['Secondary Vendor']||'').trim(),
+            poc:(r['POC']||'').trim(),
+          });
+        });
+        setInv(Array.from(skuMap.values()).map(r => {
+          const d7=Math.round(r.drr7||0), d15=Math.round(r.drr15||0), d30=Math.round(r.drr30||0);
+          return {...r, drr7:d7, drr15:d15, drr30:d30, drrMax:Math.max(d7,d15,d30)};
+        }));
+        setInvLoaded(true); setDataSource('csv'); setStatus('ok');
+        showToast(`✓ ${skuMap.size} SKUs loaded from ${file.name}`, 'ok');
+      } catch(err) { showToast('CSV parse error: '+err.message,'err'); }
+    };
+    reader.readAsText(file);
+  }
+
+  function handlePOCSV(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const rows = parseCSV(e.target.result);
+        const bySkuMap = {};
+        rows.forEach(r => {
+          const sku = (r['Item SkuCode']||r['item_skucode']||'').trim();
+          if (!sku) return;
+          if (!bySkuMap[sku]) bySkuMap[sku] = [];
+          bySkuMap[sku].push({
+            po:(r['PO Code']||'—').trim(),
+            vendor:(r['Vendor Name']||'—').trim(),
+            poDate:(r['Created']||'—').split(' ')[0],
+            delDate:(r['Delivery Date']||'—').split(' ')[0],
+            ordered:num(r['Order Quantity']||0),
+            rcvd:num(r['Recieved Quantity']||0),
+            rejected:num(r['Rejected Quantity']||0),
+            pending:num(r['Pending Quantity']||0),
+            unitPrice:num(r['Unit Price']||0),
+            total:num(r['Total']||0),
+            status:(r['Purchase Order Status']||'APPROVED').toUpperCase().replace(/ /g,'_'),
+            itemName:(r['Item Type Name']||sku).trim(),
+          });
+        });
+        setPoBySkuMap(bySkuMap);
+        const total = Object.values(bySkuMap).flat().length;
+        setPoLoaded(true); setDataSource('csv');
+        showToast(`✓ ${total} PO lines loaded from ${file.name}`, 'ok');
+      } catch(err) { showToast('CSV parse error: '+err.message,'err'); }
+    };
+    reader.readAsText(file);
+  }
+
+  function clearCSV() {
+    setInv([]); setPoBySkuMap({}); setGrnData([]);
+    setInvLoaded(false); setPoLoaded(false); setDataSource('mcp'); setStatus('idle');
+    showToast('Data cleared','ok');
+  }
 
   // ── Fetch with client-side 24h cache ──
   const fetchAll = useCallback(async (forceFullFetch = false) => {
@@ -592,12 +684,48 @@ export default function Dashboard() {
             <div className="time-chip">
               <span className={`live-dot ${status === 'loading' ? 'fetching' : status === 'error' ? 'error' : status === 'ok' ? '' : 'idle'}`} />
               <span>
-                {status === 'idle'    && 'Click Refresh to fetch live data from Uniware'}
+                {status === 'idle'    && 'Upload CSV or click Refresh from Uniware'}
                 {status === 'loading' && 'Fetching live data…'}
-                {status === 'error'   && 'Unable to connect to Uniware — check MCP token'}
+                {status === 'error'   && 'MCP unavailable — use CSV upload as fallback'}
                 {status === 'ok'      && fetchedAt && `Live · ${new Date(fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST`}
               </span>
             </div>
+          </div>
+        </div>
+
+        {/* CSV UPLOAD ZONE — fallback when MCP is unavailable */}
+        <div className="upload-zone" style={{marginBottom:'1.25rem'}}>
+          <div className="upload-inner">
+            <div className="upload-left">
+              <div className="upload-icon"><i className="ti ti-upload" /></div>
+              <div className="upload-text">
+                <h3>Upload Unicommerce CSV exports <span style={{fontSize:10,fontWeight:400,color:'var(--text3)',marginLeft:6}}>(fallback when MCP is unavailable)</span></h3>
+                <p>Inventory reorder sheet + PO details export</p>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+              <label className="ul-btn">
+                <span className="sl">Inventory CSV</span>
+                <span className="ss">{invLoaded?'✓ loaded':'click to upload'}</span>
+                <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleInvCSV(e.target.files[0])} />
+              </label>
+              <label className="ul-btn">
+                <span className="sl">PO / GRN CSV</span>
+                <span className="ss">{poLoaded?'✓ loaded':'click to upload'}</span>
+                <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>e.target.files[0]&&handlePOCSV(e.target.files[0])} />
+              </label>
+              <button className="clear-btn" onClick={clearCSV}><i className="ti ti-refresh" style={{fontSize:13}} />Clear</button>
+            </div>
+          </div>
+          <div className="upload-hint">
+            <span className="sh-cols">INVENTORY COLS:</span>
+            {['Item SKU Code','Item Type Name','Category','Last 7 days DRR','Last 15 days DRR','Last 30 days DRR','DRR Max','Inventory','Open Purchase','Days of Cover'].map(c=>(
+              <span key={c} className="sh-pill">{c}</span>
+            ))}
+            <span className="sh-cols" style={{marginLeft:8}}>PO COLS:</span>
+            {['PO Code','Item SkuCode','Item Type Name','Vendor Name','Created','Delivery Date','Order Quantity','Recieved Quantity','Pending Quantity','Purchase Order Status','Unit Price','Total'].map(c=>(
+              <span key={c} className="sh-pill">{c}</span>
+            ))}
           </div>
         </div>
 
@@ -1406,6 +1534,20 @@ export default function Dashboard() {
         .slot .ss{font-size:10px;color:var(--text3);margin-left:2px}
         .slot.loaded{border-color:var(--green);background:var(--green-dim)}
         .slot.loaded .sl,.slot.loaded .ss{color:var(--green)}
+.upload-zone{background:var(--bg2);border:1.5px dashed var(--border2);border-radius:14px;padding:1.25rem 1.5rem}
+        .upload-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px}
+        .upload-left{display:flex;align-items:center;gap:12px}
+        .upload-icon{width:42px;height:42px;border-radius:10px;background:var(--blue-dim);border:1px solid rgba(26,95,165,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+        .upload-icon i{font-size:20px;color:var(--blue)}
+        .upload-text h3{font-size:13px;font-weight:600;margin-bottom:2px}
+        .upload-text p{font-size:11px;color:var(--text3)}
+        .upload-hint{margin-top:10px;display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+        .sh-cols{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.05em}
+        .sh-pill{font-size:10px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--text2);font-family:var(--mono)}
+        .ul-btn{display:flex;flex-direction:column;align-items:center;padding:6px 14px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;cursor:pointer;min-width:110px;transition:background .15s}
+        .ul-btn:hover{background:var(--blue-dim)}
+        .sl{font-size:11px;font-weight:600;color:var(--text)}
+        .ss{font-size:10px;color:var(--text3);margin-top:1px}
         .clear-btn{display:flex;align-items:center;gap:5px;padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:none;color:var(--text3);font-size:11px;font-family:var(--mono);cursor:pointer;transition:all .15s}
         .clear-btn:hover{border-color:var(--red-mid);color:var(--red);background:var(--red-dim)}
         .upload-hint{margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
