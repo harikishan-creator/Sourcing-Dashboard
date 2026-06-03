@@ -695,8 +695,8 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* CSV UPLOAD ZONE — fallback when MCP is unavailable */}
-        <div className="upload-zone" style={{marginBottom:'1.25rem'}}>
+        {/* CSV UPLOAD ZONE — fallback when MCP unavailable */}
+        {status !== 'ok' && <div className="upload-zone" style={{marginBottom:'1.25rem'}}>
           <div className="upload-inner">
             <div className="upload-left">
               <div className="upload-icon"><i className="ti ti-upload" /></div>
@@ -729,7 +729,7 @@ export default function Dashboard() {
               <span key={c} className="sh-pill">{c}</span>
             ))}
           </div>
-        </div>
+        </div>}
 
         {/* ERROR STRIP */}
         {Object.values(errors).some(Boolean) && inv.length === 0 && activeTab !== 'forecast' && (
