@@ -144,6 +144,7 @@ function POPlanTable({ items, showUrgency }) {
             <th>ITEM</th>
             <th>CAT</th>
             <th>VENDOR</th>
+            <th className="r" title="Sales in last 24 hours" style={{color:'var(--amber)'}}>1D SALES</th>
             <th className="r">DRR MAX</th>
             <th className="r">INVENTORY</th>
             <th className="r">OPEN PO</th>
@@ -168,6 +169,7 @@ function POPlanTable({ items, showUrgency }) {
                 <td style={{fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}</td>
                 <td style={{color:'var(--text3)',fontSize:11}}>{r.cat}</td>
                 <td style={{color:'var(--text2)',fontSize:11,maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={r.vendor}>{r.vendor}</td>
+                <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':' var(--text3)'}}>{r.last1d||0}</td>
                 <td className="r" style={{fontFamily:'var(--mono)',color:'var(--text2)'}}>{fmt(r.drrMax)}</td>
                 <td className="r" style={{fontFamily:'var(--mono)',color: r.inv===0?'var(--red)':'var(--text)'}}>{fmt(r.inv)}</td>
                 <td className="r" style={{fontFamily:'var(--mono)',color:'var(--blue)'}}>{fmt(r.openPO)}</td>
@@ -269,7 +271,7 @@ export default function Dashboard() {
         });
         setInv(Array.from(skuMap.values()).map(r => {
           const d7=Math.round(r.drr7||0), d15=Math.round(r.drr15||0), d30=Math.round(r.drr30||0);
-          return {...r, drr7:d7, drr15:d15, drr30:d30, drrMax:Math.max(d7,d15,d30)};
+          return {...r, drr7:d7, drr15:d15, drr30:d30, drrMax:Math.max(d7,d15,d30), last1d:Math.round(num(r['Last 1 days DRR']||r['Last 1 Days Sale']||0))};
         }));
         setInvLoaded(true); setDataSource('csv'); setStatus('ok');
         showToast(`✓ ${skuMap.size} SKUs loaded from ${file.name}`, 'ok');
@@ -451,6 +453,8 @@ export default function Dashboard() {
       const drr7Map  = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 7)));
       const drr15Map = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 15)));
       const drr30Map = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 30)));
+      // Last 1 day sales — count rows from last 24 hours across all facilities
+      const last1dMap = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 1)));
 
       const skuMap = new Map();
       FACILITIES.forEach(fac => {
@@ -484,6 +488,7 @@ export default function Dashboard() {
         const d7=rnd(drr7Map[sku]||0), d15=rnd(drr15Map[sku]||0), d30=rnd(drr30Map[sku]||0);
         const dMax = Math.max(d7, d15, d30);
         item.drr7=d7; item.drr15=d15; item.drr30=d30; item.drrMax=dMax;
+        item.last1d = rnd(last1dMap[sku] || 0);
         item.doc = dMax>0 ? rnd(item.inv/dMax) : (item.inv>0 ? 999 : 0);
       });
 
@@ -874,7 +879,7 @@ export default function Dashboard() {
                 <table className="detail">
                   <thead><tr>
                     <th>Action</th><th>SKU</th><th>Item</th>
-                    <th className="r">7d DRR</th><th className="r">15d DRR</th><th className="r">30d DRR</th>
+                    <th className="r" title="Sales in last 24h" style={{color:'var(--amber)'}}>1D SALES</th><th className="r">7d DRR</th><th className="r">15d DRR</th><th className="r">30d DRR</th>
                     <th className="r">DOC</th><th className="r">Inventory</th><th>Open POs</th>
                   </tr></thead>
                   <tbody>
@@ -885,7 +890,7 @@ export default function Dashboard() {
                           <td><ActionBadge r={r} /></td>
                           <td><span className="sku-code">{r.sku}</span></td>
                           <td><span style={{ fontWeight: 500 }}>{r.name}</span>{sp2 && <span className="spike-tag"><i className="ti ti-flame" />spike</span>}</td>
-                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{rnd(r.drr7)}</td>
+                          <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':' var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':' var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{rnd(r.drr7)}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr15)}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr30)}</td>
                           <td className="r"><DocBadge doc={r.doc} /></td>
@@ -1081,7 +1086,7 @@ export default function Dashboard() {
                     <table className="detail">
                       <thead><tr>
                         <th style={{ width: 34 }}>Pri</th><th>Action</th><th>SKU</th><th>Item</th><th>Category</th>
-                        <th className="r">7d DRR</th><th className="r">15d DRR</th><th className="r">30d DRR</th>
+                        <th className="r" title="Sales in last 24h" style={{color:'var(--amber)'}}>1D SALES</th><th className="r">7d DRR</th><th className="r">15d DRR</th><th className="r">30d DRR</th>
                         <th className="r">Ratio</th><th className="r">DOC</th><th className="r">Inventory</th><th>Open POs</th>
                       </tr></thead>
                       <tbody>
@@ -1145,6 +1150,7 @@ export default function Dashboard() {
                         <th>SKU</th>
                         <th>ITEM</th>
                         <th>CATEGORY</th>
+                        <th className="r" title="Sales in last 24h" style={{color:'var(--amber)'}}>1D SALES</th>
                         <th className="r">7D DRR</th>
                         <th className="r">15D DRR</th>
                         <th className="r">30D DRR</th>
@@ -1159,6 +1165,7 @@ export default function Dashboard() {
                           <td><span className="sku-badge">{r.sku}</span></td>
                           <td style={{ fontWeight: 500 }}>{r.name}</td>
                           <td style={{ color: 'var(--text3)', fontSize: 11 }}>{r.cat}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: (r.last1d||0)>0?'var(--green)':'var(--text3)' }}>{r.last1d||0}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--red-mid)', fontWeight: 700 }}>{rnd(r.drr7)}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr15)}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr30)}</td>
@@ -1308,7 +1315,8 @@ export default function Dashboard() {
                         <th>SKU</th>
                         <th>ITEM</th>
                         <th>CAT</th>
-                        <th className="r" title="Weighted DRR = 7d×50% + 15d×30% + 30d×20%">W.DRR</th>
+                        <th className="r" <th className="r" title="Sales in last 24h" style={{color:'var(--amber)'}}>1D SALES</th>
+                        <th title="Weighted DRR = 7d×50% + 15d×30% + 30d×20%">W.DRR</th>
                         <th className="r">7D</th>
                         <th className="r">30D</th>
                         <th className="r">INV</th>
@@ -1342,7 +1350,8 @@ export default function Dashboard() {
                             <td><span className="sku-badge">{r.sku}</span></td>
                             <td style={{fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}</td>
                             <td style={{color:'var(--text3)',fontSize:11}}>{r.cat}</td>
-                            <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:'var(--blue)'}}
+                            <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':' var(--text3)'}}>{r.last1d||0}</td>
+<td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:'var(--blue)'}}
                                 title={'7d×0.5 + 15d×0.3 + 30d×0.2 = '+r.wdrr}>
                               {r.wdrr}
                             </td>
