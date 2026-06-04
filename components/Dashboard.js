@@ -453,8 +453,20 @@ export default function Dashboard() {
       const drr7Map  = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 7)));
       const drr15Map = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 15)));
       const drr30Map = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 30)));
-      // Last 1 day sales — count rows from last 24 hours across all facilities
-      const last1dMap = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 1)));
+      // Last 1 day sales — count rows from LAST 24 HOURS only (no division)
+      const calcLast1d = (rows) => {
+        const cutoff = Date.now() - 86400000; // exactly 24 hours
+        const c = {};
+        (rows||[]).forEach(r => {
+          const s = (r['Item SKU Code']||r['Item SkuCode']||'').trim();
+          if (!s) return;
+          const created = r['Created'] ? new Date(r['Created']).getTime() : 0;
+          if (created >= cutoff) c[s] = (c[s]||0) + 1;
+        });
+        return c;
+      };
+      const last1dMaps = FACILITIES.map(f => calcLast1d(drr30Data[f]));
+      const last1dMap = merge(...last1dMaps);
 
       const skuMap = new Map();
       FACILITIES.forEach(fac => {
