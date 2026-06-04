@@ -531,7 +531,11 @@ export default function Dashboard() {
 
 
   // Auto-fetch disabled — click 'Refresh from Uniware' manually when MCP token is ready
-  useEffect(() => { fetchAll(); }, []); // Auto-fetch on page load
+  useEffect(() => {
+    // Clear stale sessionStorage cache on load to always get fresh data
+    try { sessionStorage.removeItem('inv_cache_v2'); } catch(e) {}
+    fetchAll();
+  }, []); // Auto-fetch on page load
 
   // ── derived data (all in one block to prevent bundler reordering TDZ) ──
   var whitelistedInv = inv.filter(r => SKU_CAT_MAP[r.sku]);
@@ -695,6 +699,9 @@ export default function Dashboard() {
             <button className="btn-refresh" onClick={() => fetchAll(false)} disabled={loading}>
               <i className={`ti ${loading ? 'ti-loader-2 spin' : 'ti-refresh'}`} style={{ fontSize: 13 }} />
               {loading ? 'Fetching…' : 'Refresh from Uniware'}
+            </button>
+            <button className="btn-refresh" onClick={() => { try{sessionStorage.clear();}catch(e){} fetchAll(true); }} disabled={loading} title="Clear cache and force full refresh" style={{fontSize:11,padding:'7px 10px',background:'var(--amber)',color:'#fff'}}>
+              <i className="ti ti-trash" style={{fontSize:11}} /> Clear Cache &amp;
             </button>
             <button className="btn-refresh" onClick={() => fetchAll(true)} disabled={loading} title="Force full 30-day fetch" style={{fontSize:11,padding:'7px 10px'}}>
               <i className="ti ti-refresh-alert" style={{ fontSize: 13 }} />
@@ -902,7 +909,7 @@ export default function Dashboard() {
                           <td><ActionBadge r={r} /></td>
                           <td><span className="sku-code">{r.sku}</span></td>
                           <td><span style={{ fontWeight: 500 }}>{r.name}</span>{sp2 && <span className="spike-tag"><i className="ti ti-flame" />spike</span>}</td>
-                          <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':'var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':'var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{rnd(r.drr7)}</td>
+                          <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':'var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{rnd(r.drr7)}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr15)}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr30)}</td>
                           <td className="r"><DocBadge doc={r.doc} /></td>
