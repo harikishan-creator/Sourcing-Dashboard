@@ -169,7 +169,7 @@ function POPlanTable({ items, showUrgency }) {
                 <td style={{fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}</td>
                 <td style={{color:'var(--text3)',fontSize:11}}>{r.cat}</td>
                 <td style={{color:'var(--text2)',fontSize:11,maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={r.vendor}>{r.vendor}</td>
-                <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':' var(--text3)'}}>{r.last1d||0}</td>
+                <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':'var(--text3)'}}>{r.last1d||0}</td>
                 <td className="r" style={{fontFamily:'var(--mono)',color:'var(--text2)'}}>{fmt(r.drrMax)}</td>
                 <td className="r" style={{fontFamily:'var(--mono)',color: r.inv===0?'var(--red)':'var(--text)'}}>{fmt(r.inv)}</td>
                 <td className="r" style={{fontFamily:'var(--mono)',color:'var(--blue)'}}>{fmt(r.openPO)}</td>
@@ -890,7 +890,7 @@ export default function Dashboard() {
                           <td><ActionBadge r={r} /></td>
                           <td><span className="sku-code">{r.sku}</span></td>
                           <td><span style={{ fontWeight: 500 }}>{r.name}</span>{sp2 && <span className="spike-tag"><i className="ti ti-flame" />spike</span>}</td>
-                          <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':' var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':' var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{rnd(r.drr7)}</td>
+                          <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':'var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':'var(--text3)'}}>{r.last1d||0}</td><td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: r.drr7 > r.drr30 ? 700 : 400, color: r.drr7 > r.drr30 ? 'var(--amber-mid)' : 'var(--text2)' }}>{rnd(r.drr7)}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr15)}</td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr30)}</td>
                           <td className="r"><DocBadge doc={r.doc} /></td>
@@ -1315,7 +1315,7 @@ export default function Dashboard() {
                         <th>SKU</th>
                         <th>ITEM</th>
                         <th>CAT</th>
-                        <th className="r" <th className="r" title="Sales in last 24h" style={{color:'var(--amber)'}}>1D SALES</th>
+                        <th className="r" title="Sales in last 24h" style={{color:'var(--amber)'}}>1D SALES</th>
                         <th title="Weighted DRR = 7d×50% + 15d×30% + 30d×20%">W.DRR</th>
                         <th className="r">7D</th>
                         <th className="r">30D</th>
@@ -1350,8 +1350,8 @@ export default function Dashboard() {
                             <td><span className="sku-badge">{r.sku}</span></td>
                             <td style={{fontWeight:500,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}</td>
                             <td style={{color:'var(--text3)',fontSize:11}}>{r.cat}</td>
-                            <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':' var(--text3)'}}>{r.last1d||0}</td>
-<td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:'var(--blue)'}}
+                            <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:(r.last1d||0)>0?'var(--green)':'var(--text3)'}}>{r.last1d||0}</td>
+                <td className="r" style={{fontFamily:'var(--mono)',fontWeight:700,color:'var(--blue)'}}
                                 title={'7d×0.5 + 15d×0.3 + 30d×0.2 = '+r.wdrr}>
                               {r.wdrr}
                             </td>
