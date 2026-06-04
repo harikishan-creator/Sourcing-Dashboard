@@ -1112,6 +1112,7 @@ export default function Dashboard() {
                               <td><span className="sku-code">{r.sku}</span></td>
                               <td><span style={{ fontWeight: 500 }}>{r.name}</span></td>
                               <td><span className="badge" style={{ background: 'var(--bg3)', color: 'var(--text3)', border: '1px solid var(--border)', fontSize: 9 }}>{r.cat}</span></td>
+                              <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: (r.last1d||0)>0?'var(--green)':'var(--text3)' }}>{r.last1d||0}</td>
                               <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--amber-mid)' }}>{rnd(r.drr7)}</td>
                               <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{rnd(r.drr15)}</td>
                               <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{rnd(r.drr30)}</td>
