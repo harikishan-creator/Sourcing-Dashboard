@@ -1,28 +1,30 @@
 /**
- * pages/api/uniware.js — Secure Vercel proxy with KV cache
- * drr30/MSKT_FZP is cached in Vercel KV for 6 hours (shared across all users)
+ * pages/api/uniware.js — Secure Vercel proxy with Upstash Redis cache
+ * drr30/MSKT_FZP cached for 6 hours — shared across all team members
  */
 
 import { init, triggerJob, pollJob, downloadCSV } from '../../lib/mcpClient';
+import { Redis } from '@upstash/redis';
 
 export const config = { maxDuration: 60 };
 
-// KV cache key and TTL
-const KV_KEY   = 'drr30_mskt_fzp';
-const KV_TTL   = 6 * 60 * 60; // 6 hours in seconds
+const KV_KEY = 'drr30_mskt_fzp';
+const KV_TTL = 6 * 60 * 60; // 6 hours in seconds
 
-// Lazy-load KV to avoid build errors if env vars not set
-async function getKV() {
-  try {
-    const { kv } = await import('@vercel/kv');
-    return kv;
-  } catch {
-    return null;
+// Init Redis — uses UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN env vars
+let redis = null;
+function getRedis() {
+  if (!redis && process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+    redis = new Redis({
+      url:   process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    });
   }
+  return redis;
 }
 
 export default async function handler(req, res) {
-  // CORS — allow packaging.html and other Vercel deployments
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -39,76 +41,63 @@ export default async function handler(req, res) {
 
     // ── TRIGGER ───────────────────────────────────────────────────────────────
     if (action === 'trigger') {
-      // Check KV cache for drr30/MSKT_FZP (the slow job)
+      // Check Redis cache for drr30/MSKT_FZP
       if (type === 'drr30' && facility === 'MSKT_FZP' && !forceRefresh) {
-        const kv = await getKV();
-        if (kv) {
+        const r = getRedis();
+        if (r) {
           try {
-            const cached = await kv.get(KV_KEY);
+            const cached = await r.get(KV_KEY);
             if (cached) {
-              // Return a special jobCode indicating cached data is available
-              console.log('[KV] Cache hit for drr30/MSKT_FZP');
-              return res.status(200).json({ 
-                jobCode: 'KV_CACHED', 
-                facility, 
+              console.log('[Redis] Cache hit drr30/MSKT_FZP —', cached.rows?.length, 'rows');
+              return res.status(200).json({
+                jobCode:    'KV_CACHED',
+                facility,
                 type,
                 cachedRows: cached.rows,
-                cachedAt: cached.ts,
+                cachedAt:   cached.ts,
               });
             }
-          } catch (kvErr) {
-            console.warn('[KV] Read error:', kvErr.message);
-          }
+          } catch (e) { console.warn('[Redis] Read error:', e.message); }
         }
       }
-
       const code = await triggerJob(type, facility);
       return res.status(200).json({ jobCode: code, facility, type });
     }
 
     // ── POLL ──────────────────────────────────────────────────────────────────
     if (action === 'poll') {
-      // KV_CACHED jobs are already done
-      if (jobCode === 'KV_CACHED') {
-        return res.status(200).json({ status: 'DONE', url: 'KV_CACHED' });
-      }
+      if (jobCode === 'KV_CACHED') return res.status(200).json({ status: 'DONE', url: 'KV_CACHED' });
       const result = await pollJob(jobCode, facility);
       return res.status(200).json(result);
     }
 
     // ── DOWNLOAD ──────────────────────────────────────────────────────────────
     if (action === 'download') {
-      // KV_CACHED — rows already returned in trigger response, this is a no-op
-      if (url === 'KV_CACHED') {
-        return res.status(200).json({ rows: [], fromCache: true });
-      }
+      if (url === 'KV_CACHED') return res.status(200).json({ rows: [], fromCache: true });
 
       const rows = await downloadCSV(url);
 
-      // Save drr30/MSKT_FZP to KV cache after download
+      // Cache drr30/MSKT_FZP in Redis after download
       if (type === 'drr30' && facility === 'MSKT_FZP') {
-        const kv = await getKV();
-        if (kv) {
+        const r = getRedis();
+        if (r) {
           try {
-            await kv.set(KV_KEY, { rows, ts: Date.now() }, { ex: KV_TTL });
-            console.log(`[KV] Cached drr30/MSKT_FZP — ${rows.length} rows, TTL ${KV_TTL}s`);
-          } catch (kvErr) {
-            console.warn('[KV] Write error:', kvErr.message);
-          }
+            await r.set(KV_KEY, { rows, ts: Date.now() }, { ex: KV_TTL });
+            console.log('[Redis] Cached drr30/MSKT_FZP —', rows.length, 'rows, TTL 6h');
+          } catch (e) { console.warn('[Redis] Write error:', e.message); }
         }
       }
-
       return res.status(200).json({ rows });
     }
 
-    // ── CACHE INVALIDATE (called by Full Fetch button) ────────────────────────
+    // ── INVALIDATE CACHE (Full Fetch button) ──────────────────────────────────
     if (action === 'invalidate_cache') {
-      const kv = await getKV();
-      if (kv) {
-        await kv.del(KV_KEY);
-        console.log('[KV] Cache invalidated');
+      const r = getRedis();
+      if (r) {
+        await r.del(KV_KEY);
+        console.log('[Redis] Cache invalidated');
       }
-      return res.status(200).json({ ok: true, invalidated: KV_KEY });
+      return res.status(200).json({ ok: true });
     }
 
     return res.status(400).json({ error: `Unknown action: ${action}` });
