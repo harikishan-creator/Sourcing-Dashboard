@@ -346,15 +346,25 @@ export default function Dashboard() {
     showToast(needFull ? '📦 Full fetch (30d DRR)…' : '⚡ Delta fetch (48h)…', 'info');
 
     // Helper: trigger → poll → download one job (with 2s poll interval for speed)
-    const runJob = async (type, facility) => {
+    const runJob = async (type, facility, forceRefresh = false) => {
       try {
         const t = await fetch('/api/uniware', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'trigger', type, facility }),
+          body: JSON.stringify({ action: 'trigger', type, facility, forceRefresh }),
         });
-        const { jobCode, error: e } = await t.json();
+        const trigData = await t.json();
+        const { jobCode, error: e, cachedRows } = trigData;
+
+        // KV cache hit — rows returned immediately
+        if (jobCode === 'KV_CACHED' && cachedRows) {
+          const cacheAge = trigData.cachedAt ? Math.round((Date.now()-trigData.cachedAt)/60000) : '?';
+          showToast('⚡ drr30/MSKT_FZP from shared cache (' + cacheAge + 'm old)', 'ok');
+          return cachedRows;
+        }
+
         if (e || !jobCode) return [];
-        // Poll every 2s, max 10 attempts = 20s max per job
+
+        // Normal flow: poll until done
         for (let i = 0; i < 25; i++) {
           await new Promise(r => setTimeout(r, 8000));
           const p = await fetch('/api/uniware', {
@@ -365,7 +375,7 @@ export default function Dashboard() {
           if (pd.status === 'DONE') {
             const d = await fetch('/api/uniware', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'download', url: pd.url }),
+              body: JSON.stringify({ action: 'download', url: pd.url, type, facility }),
             });
             const { rows } = await d.json();
             return rows || [];
@@ -374,7 +384,7 @@ export default function Dashboard() {
         }
       } catch {}
       return [];
-    };
+    };;
 
     try {
       // Step 1: Inventory snapshots — sequential
@@ -383,9 +393,10 @@ export default function Dashboard() {
       for (const fac of FACILITIES) invData[fac] = await runJob('inventory', fac);
 
       // Step 2: DRR 30d export — sequential
+      // drr30/MSKT_FZP uses KV cache (fast if cached, slow only on first load of day)
       showToast('Fetching 30d sales…', 'info');
       const drr30Data = {};
-      for (const fac of FACILITIES) drr30Data[fac] = await runJob('drr30', fac);
+      for (const fac of FACILITIES) drr30Data[fac] = await runJob('drr30', fac, forceFullFetch);
 
       // Step 3: PO — full fetch or from cache
       let poBySkuMapNew = {};
@@ -703,7 +714,11 @@ export default function Dashboard() {
             <button className="btn-refresh" onClick={() => { try{sessionStorage.clear();}catch(e){} fetchAll(true); }} disabled={loading} title="Clear cache and force full refresh" style={{fontSize:11,padding:'7px 10px',background:'var(--amber)',color:'#fff'}}>
               <i className="ti ti-trash" style={{fontSize:11}} /> Clear Cache &amp;
             </button>
-            <button className="btn-refresh" onClick={() => fetchAll(true)} disabled={loading} title="Force full 30-day fetch" style={{fontSize:11,padding:'7px 10px'}}>
+            <button className="btn-refresh" onClick={async () => {
+              // Invalidate KV cache so fresh data is fetched for everyone
+              try { await fetch('/api/uniware',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'invalidate_cache'})}); } catch {}
+              fetchAll(true);
+            }} disabled={loading} title="Force full fetch — clears shared cache for whole team" style={{fontSize:11,padding:'7px 10px'}}>
               <i className="ti ti-refresh-alert" style={{ fontSize: 13 }} />
               Full fetch
             </button>
