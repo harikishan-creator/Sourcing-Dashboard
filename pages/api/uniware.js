@@ -9,6 +9,12 @@ import { init, triggerJob, pollJob, downloadCSV } from '../../lib/mcpClient';
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
+  // CORS — allow packaging.html and any other Vercel deployments to call this API
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
   if (!process.env.MCP_TOKEN) return res.status(500).json({ error: 'MCP_TOKEN not configured' });
 
   if (req.method === 'GET') {
