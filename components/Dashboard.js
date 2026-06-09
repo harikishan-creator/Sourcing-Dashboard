@@ -353,18 +353,19 @@ export default function Dashboard() {
           body: JSON.stringify({ action: 'trigger', type, facility, forceRefresh }),
         });
         const trigData = await t.json();
-        const { jobCode, error: e, cachedRows } = trigData;
+        const { jobCode, error: e, drrMap, cachedAt } = trigData;
 
-        // KV cache hit — rows returned immediately
-        if (jobCode === 'KV_CACHED' && cachedRows) {
-          const cacheAge = trigData.cachedAt ? Math.round((Date.now()-trigData.cachedAt)/60000) : '?';
-          showToast('⚡ drr30/MSKT_FZP from shared cache (' + cacheAge + 'm old)', 'ok');
-          return cachedRows;
+        // Redis cache hit — pre-computed DRR map returned instantly
+        if (jobCode === 'KV_CACHED' && drrMap) {
+          const ageMin = cachedAt ? Math.round((Date.now() - cachedAt) / 60000) : '?';
+          showToast('⚡ DRR loaded from shared cache (' + ageMin + 'm old)', 'ok');
+          // Convert {sku:{d7,d15,d30}} back to row format for calcDRR compatibility
+          // Return as special marker — handled in drr30 processing below
+          return { __fromCache: true, drrMap };
         }
 
         if (e || !jobCode) return [];
 
-        // Normal flow: poll until done
         for (let i = 0; i < 25; i++) {
           await new Promise(r => setTimeout(r, 8000));
           const p = await fetch('/api/uniware', {
@@ -382,9 +383,9 @@ export default function Dashboard() {
           }
           if (pd.status === 'FAILED') return [];
         }
-      } catch {}
+      } catch(err) { console.error('runJob error:', err); }
       return [];
-    };;
+    };;;
 
     try {
       // Step 1: Inventory snapshots — sequential
@@ -461,9 +462,26 @@ export default function Dashboard() {
       };
 
       // All 3 DRR windows from the single 30d export — saves 8 export jobs
-      const drr7Map  = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 7)));
-      const drr15Map = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 15)));
-      const drr30Map = merge(...FACILITIES.map(f => calcDRR(drr30Data[f], 30)));
+      // Build DRR maps — MSKT_FZP may come from Redis cache (pre-computed)
+      const msktData = drr30Data['MSKT_FZP'];
+      let msktDrr7 = {}, msktDrr15 = {}, msktDrr30 = {};
+      if (msktData && msktData.__fromCache && msktData.drrMap) {
+        // Pre-computed maps from Redis — extract directly
+        Object.entries(msktData.drrMap).forEach(([sku, v]) => {
+          msktDrr7[sku]  = v.d7  || 0;
+          msktDrr15[sku] = v.d15 || 0;
+          msktDrr30[sku] = v.d30 || 0;
+        });
+        showToast('⚡ MSKT_FZP DRR from shared cache', 'ok');
+      } else {
+        msktDrr7  = calcDRR(msktData, 7);
+        msktDrr15 = calcDRR(msktData, 15);
+        msktDrr30 = calcDRR(msktData, 30);
+      }
+      const otherFacs = FACILITIES.filter(f => f !== 'MSKT_FZP');
+      const drr7Map  = merge(msktDrr7,  ...otherFacs.map(f => calcDRR(drr30Data[f], 7)));
+      const drr15Map = merge(msktDrr15, ...otherFacs.map(f => calcDRR(drr30Data[f], 15)));
+      const drr30Map = merge(msktDrr30, ...otherFacs.map(f => calcDRR(drr30Data[f], 30)));
       // Last 1 day sales — count rows from LAST 24 HOURS only (no division)
       const calcLast1d = (rows) => {
         const cutoff = Date.now() - 86400000; // exactly 24 hours
@@ -476,7 +494,10 @@ export default function Dashboard() {
         });
         return c;
       };
-      const last1dMaps = FACILITIES.map(f => calcLast1d(drr30Data[f]));
+      // last1d: skip MSKT_FZP if it came from cache (no raw rows)
+      const last1dMaps = FACILITIES
+        .filter(f => !(f === 'MSKT_FZP' && drr30Data[f] && drr30Data[f].__fromCache))
+        .map(f => calcLast1d(drr30Data[f]));
       const last1dMap = merge(...last1dMaps);
 
       const skuMap = new Map();
