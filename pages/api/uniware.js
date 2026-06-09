@@ -1,6 +1,7 @@
 /**
  * pages/api/uniware.js — Secure Vercel proxy with Upstash Redis cache
- * drr30/MSKT_FZP cached for 6 hours — shared across all team members
+ * drr30/MSKT_FZP: computed server-side, only DRR maps cached (~5KB, 6h TTL)
+ * Shared across all team members via Upstash Redis
  */
 
 import { init, triggerJob, pollJob, downloadCSV } from '../../lib/mcpClient';
@@ -8,10 +9,9 @@ import { Redis } from '@upstash/redis';
 
 export const config = { maxDuration: 60 };
 
-const KV_KEY = 'drr30_mskt_fzp';
-const KV_TTL = 6 * 60 * 60; // 6 hours in seconds
+const KV_KEY = 'drrmap_mskt_fzp_v1';
+const KV_TTL = 6 * 60 * 60; // 6 hours
 
-// Init Redis — uses UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN env vars
 let redis = null;
 function getRedis() {
   if (!redis && process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
@@ -23,8 +23,36 @@ function getRedis() {
   return redis;
 }
 
+// Compute DRR maps from raw rows (runs server-side)
+function computeDRRMaps(rows) {
+  const now = Date.now();
+  const cut7  = now - 7  * 86400000;
+  const cut15 = now - 15 * 86400000;
+  const cut30 = now - 30 * 86400000;
+  const c7 = {}, c15 = {}, c30 = {};
+
+  (rows || []).forEach(r => {
+    const s = (r['Item SKU Code'] || r['Item SkuCode'] || '').trim();
+    if (!s) return;
+    const t = r['Created'] ? new Date(r['Created']).getTime() : 0;
+    if (t >= cut7)  c7[s]  = (c7[s]  || 0) + 1;
+    if (t >= cut15) c15[s] = (c15[s] || 0) + 1;
+    if (t >= cut30) c30[s] = (c30[s] || 0) + 1;
+  });
+
+  const map = {};
+  const allSkus = new Set([...Object.keys(c7), ...Object.keys(c15), ...Object.keys(c30)]);
+  allSkus.forEach(s => {
+    map[s] = {
+      d7:  Math.round((c7[s]  || 0) / 7),
+      d15: Math.round((c15[s] || 0) / 15),
+      d30: Math.round((c30[s] || 0) / 30),
+    };
+  });
+  return map;  // { 'BP_0429': { d7: 938, d15: 511, d30: 381 }, ... }
+}
+
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -41,20 +69,20 @@ export default async function handler(req, res) {
 
     // ── TRIGGER ───────────────────────────────────────────────────────────────
     if (action === 'trigger') {
-      // Check Redis cache for drr30/MSKT_FZP
+      // Check Redis for pre-computed DRR map for MSKT_FZP
       if (type === 'drr30' && facility === 'MSKT_FZP' && !forceRefresh) {
         const r = getRedis();
         if (r) {
           try {
             const cached = await r.get(KV_KEY);
-            if (cached) {
-              console.log('[Redis] Cache hit drr30/MSKT_FZP —', cached.rows?.length, 'rows');
+            if (cached && cached.map) {
+              const ageMin = Math.round((Date.now() - cached.ts) / 60000);
+              console.log('[Redis] HIT drrmap/MSKT_FZP —', Object.keys(cached.map).length, 'SKUs,', ageMin, 'min old');
               return res.status(200).json({
-                jobCode:    'KV_CACHED',
-                facility,
-                type,
-                cachedRows: cached.rows,
-                cachedAt:   cached.ts,
+                jobCode:   'KV_CACHED',
+                facility,  type,
+                drrMap:    cached.map,   // pre-computed { sku: {d7,d15,d30} }
+                cachedAt:  cached.ts,
               });
             }
           } catch (e) { console.warn('[Redis] Read error:', e.message); }
@@ -77,26 +105,27 @@ export default async function handler(req, res) {
 
       const rows = await downloadCSV(url);
 
-      // Cache drr30/MSKT_FZP in Redis after download
+      // For drr30/MSKT_FZP: compute maps server-side and cache them (~5KB)
       if (type === 'drr30' && facility === 'MSKT_FZP') {
+        const drrMap = computeDRRMaps(rows);
         const r = getRedis();
         if (r) {
           try {
-            await r.set(KV_KEY, { rows, ts: Date.now() }, { ex: KV_TTL });
-            console.log('[Redis] Cached drr30/MSKT_FZP —', rows.length, 'rows, TTL 6h');
+            await r.set(KV_KEY, { map: drrMap, ts: Date.now() }, { ex: KV_TTL });
+            console.log('[Redis] CACHED drrmap/MSKT_FZP —', Object.keys(drrMap).length, 'SKUs');
           } catch (e) { console.warn('[Redis] Write error:', e.message); }
         }
+        // Return rows as normal — client will compute its own maps from rows
+        // (or we could return drrMap directly — client handles both)
       }
+
       return res.status(200).json({ rows });
     }
 
-    // ── INVALIDATE CACHE (Full Fetch button) ──────────────────────────────────
+    // ── INVALIDATE CACHE ──────────────────────────────────────────────────────
     if (action === 'invalidate_cache') {
       const r = getRedis();
-      if (r) {
-        await r.del(KV_KEY);
-        console.log('[Redis] Cache invalidated');
-      }
+      if (r) { await r.del(KV_KEY); console.log('[Redis] Cache invalidated'); }
       return res.status(200).json({ ok: true });
     }
 
