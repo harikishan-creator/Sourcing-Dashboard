@@ -394,10 +394,12 @@ export default function Dashboard() {
       for (const fac of FACILITIES) invData[fac] = await runJob('inventory', fac);
 
       // Step 2: DRR 30d export — sequential
-      // drr30/MSKT_FZP uses KV cache (fast if cached, slow only on first load of day)
-      showToast('Fetching 30d sales…', 'info');
+      // Quick mode (48h): faster, good for daily use — Full mode (30d): complete data
+      const isQuick = forceFullFetch === 'quick';
+      const drrType = isQuick ? 'drr48h' : 'drr30';
+      showToast(isQuick ? '⚡ Quick Refresh — fetching 48h sales…' : 'Fetching 30d sales…', 'info');
       const drr30Data = {};
-      for (const fac of FACILITIES) drr30Data[fac] = await runJob('drr30', fac, forceFullFetch);
+      for (const fac of FACILITIES) drr30Data[fac] = await runJob(drrType, fac, forceFullFetch === true);
 
       // Step 3: PO — full fetch or from cache
       let poBySkuMapNew = {};
@@ -562,7 +564,7 @@ export default function Dashboard() {
   }, [showToast]);
 
 
-  // Auto-fetch disabled — click 'Refresh from Uniware' manually when MCP token is ready
+  // Auto-fetch disabled — click 'Quick Refresh (48h)' manually when MCP token is ready
   useEffect(() => {
     // Clear stale sessionStorage cache on load to always get fresh data
     try { sessionStorage.removeItem('inv_cache_v2'); } catch(e) {}
@@ -728,25 +730,26 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="top-right">
-            <button className="btn-refresh" onClick={() => fetchAll(false)} disabled={loading}>
-              <i className={`ti ${loading ? 'ti-loader-2 spin' : 'ti-refresh'}`} style={{ fontSize: 13 }} />
-              {loading ? 'Fetching…' : 'Refresh from Uniware'}
-            </button>
-            <button className="btn-refresh" onClick={() => { try{sessionStorage.clear();}catch(e){} fetchAll(true); }} disabled={loading} title="Clear cache and force full refresh" style={{fontSize:11,padding:'7px 10px',background:'var(--amber)',color:'#fff'}}>
-              <i className="ti ti-trash" style={{fontSize:11}} /> Clear Cache &amp;
+            <button className="btn-refresh" onClick={() => fetchAll('quick')} disabled={loading}
+              title="Quick Refresh — last 48h sales (~1.7 min). Fresh 7d DRR + 1D sales."
+              style={{background:'var(--teal)',boxShadow:'0 1px 4px rgba(13,148,136,0.3)'}}>
+              <i className={`ti ${loading ? 'ti-loader-2 spin' : 'ti-clock'}`} style={{fontSize:13}} />
+              {loading ? 'Fetching…' : 'Quick Refresh (48h)'}
             </button>
             <button className="btn-refresh" onClick={async () => {
-              // Invalidate KV cache so fresh data is fetched for everyone
-              try { await fetch('/api/uniware',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'invalidate_cache'})}); } catch {}
+              try { await fetch('/api/uniware',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'invalidate_cache'})}); } catch(e) {}
               fetchAll(true);
-            }} disabled={loading} title="Force full fetch — clears shared cache for whole team" style={{fontSize:11,padding:'7px 10px'}}>
-              <i className="ti ti-refresh-alert" style={{ fontSize: 13 }} />
-              Full fetch
+            }} disabled={loading}
+              title="Full Refresh — 30-day data (~3.5 min). Clears shared cache for whole team."
+              style={{fontSize:11,padding:'7px 10px'}}>
+              <i className={`ti ${loading ? 'ti-loader-2 spin' : 'ti-refresh'}`} style={{fontSize:13}} />
+              {loading ? 'Fetching…' : 'Full Refresh (30d)'}
             </button>
+            
             <div className="time-chip">
               <span className={`live-dot ${status === 'loading' ? 'fetching' : status === 'error' ? 'error' : status === 'ok' ? '' : 'idle'}`} />
               <span>
-                {status === 'idle'    && 'Upload CSV or click Refresh from Uniware'}
+                {status === 'idle'    && 'Upload CSV or click Quick Refresh (48h)'}
                 {status === 'loading' && 'Fetching live data…'}
                 {status === 'error'   && 'MCP unavailable — use CSV upload as fallback'}
                 {status === 'ok'      && fetchedAt && `Live · ${new Date(fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST`}
@@ -1361,7 +1364,7 @@ export default function Dashboard() {
             {forecast.length === 0
               ? <div className="empty-state">
                   <i className="ti ti-crystal-ball" />
-                  <p>{loading ? 'Loading…' : 'No data yet — click Refresh from Uniware'}</p>
+                  <p>{loading ? 'Loading…' : 'No data yet — click Quick Refresh (48h)'}</p>
                 </div>
               : (
                 <div style={{overflowX:'auto'}}>
