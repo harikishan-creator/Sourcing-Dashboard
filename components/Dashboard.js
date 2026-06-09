@@ -1257,7 +1257,6 @@ export default function Dashboard() {
 
         {activeTab === 'forecast' && (
           <div className="card">
-
             {/* Header */}
             <div className="card-head" style={{flexWrap:'wrap',gap:8}}>
               <span className="card-title">
@@ -1650,11 +1649,11 @@ export default function Dashboard() {
         .mc.c-blue .val{color:var(--blue)}.mc.c-green .val{color:var(--green)}
         .mc.c-amber .val{color:var(--amber-mid)}.mc.c-red .val{color:var(--red-mid)}
         .mc.c-teal .val{color:var(--teal)}.mc.c-purple .val{color:var(--purple)}
-        .tab-bar{display:flex;gap:4px;margin-bottom:0.5rem;background:var(--bg3);padding:4px;border-radius:10px;width:fit-content;border:1px solid var(--border)}
+        .tab-bar{display:flex;gap:4px;margin-bottom:0;background:var(--bg3);padding:4px;border-radius:10px;width:fit-content;border:1px solid var(--border)}
         .tb{display:flex;align-items:center;gap:7px;padding:7px 16px;font-size:12px;font-family:var(--sans);border:none;border-radius:7px;cursor:pointer;background:none;color:var(--text3);font-weight:500;transition:all .15s}
         .tb:hover{color:var(--text);background:var(--bg4)}
         .tb.active{background:var(--bg2);color:var(--text);border:1px solid var(--border2);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.08)}
-        .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:1.25rem;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+        .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:0.5rem;margin-bottom:1.25rem;box-shadow:0 1px 3px rgba(0,0,0,.04)}
         .card-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px}
         .card-title{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
         .card-chip{font-size:10px;padding:2px 8px;background:var(--bg3);color:var(--text3);border-radius:20px;font-weight:500;border:1px solid var(--border);font-family:var(--mono)}
