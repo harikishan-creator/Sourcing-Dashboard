@@ -740,7 +740,7 @@ export default function Dashboard() {
           <div className="top-right">
             <button className="btn-refresh" onClick={() => fetchAll('quick')} disabled={loading}
               title="Quick Refresh — last 48h sales (~1.7 min). Fresh 7d DRR + 1D sales."
-              style={{background:'var(--teal)',boxShadow:'0 1px 4px rgba(13,148,136,0.3)'}}>
+              style={{fontSize:11,padding:'7px 10px'}}>
               <i className={`ti ${loading ? 'ti-loader-2 spin' : 'ti-clock'}`} style={{fontSize:13}} />
               {loading ? 'Fetching…' : 'Quick Refresh (48h)'}
             </button>
