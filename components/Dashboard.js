@@ -363,13 +363,15 @@ export default function Dashboard() {
         const trigData = await t.json();
         const { jobCode, error: e, drrMap, cachedAt } = trigData;
 
-        // Redis cache hit — pre-computed DRR map returned instantly
-        if (jobCode === 'KV_CACHED' && drrMap) {
+        // Redis cache hit — data returned instantly, no polling needed
+        if (jobCode === 'KV_CACHED') {
           const ageMin = cachedAt ? Math.round((Date.now() - cachedAt) / 60000) : '?';
-          showToast('⚡ DRR loaded from shared cache (' + ageMin + 'm old)', 'ok');
-          // Convert {sku:{d7,d15,d30}} back to row format for calcDRR compatibility
-          // Return as special marker — handled in drr30 processing below
-          return { __fromCache: true, drrMap };
+          showToast(`⚡ ${type}/${facility} from shared cache (${ageMin}m old)`, 'ok');
+          // DRR hit — return drrMap marker
+          if (drrMap) return { __fromCache: true, drrMap };
+          // Inventory/PO hit — return rows directly
+          if (trigData.rows !== undefined) return trigData.rows;
+          return [];
         }
 
         if (e || !jobCode) return [];
