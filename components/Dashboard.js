@@ -375,7 +375,7 @@ export default function Dashboard() {
         if (e || !jobCode) return [];
 
         for (let i = 0; i < 25; i++) {
-          await new Promise(r => setTimeout(r, 8000));
+          await new Promise(r => setTimeout(r, 3000));
           const p = await fetch('/api/uniware', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'poll', jobCode, facility }),
@@ -396,16 +396,17 @@ export default function Dashboard() {
     };;;
 
     try {
-      // Step 1: Inventory snapshots — sequential
+      // Step 1: Inventory snapshots — PARALLEL across all facilities
       showToast('Fetching inventory…', 'info');
-      const invData = {};
-      for (const fac of FACILITIES) invData[fac] = await runJob('inventory', fac);
+      const invResults = await Promise.all(FACILITIES.map(fac => runJob('inventory', fac)));
+      const invData = Object.fromEntries(FACILITIES.map((fac, i) => [fac, invResults[i]]));
 
       // Step 2: DRR 30d export — sequential
       // Quick mode (48h): faster, good for daily use — Full mode (30d): complete data
       const isQuick = forceFullFetch === 'quick';
       const drrType = isQuick ? 'drr48h' : 'drr30';
       showToast(isQuick ? '⚡ Quick Refresh — fetching 48h sales…' : 'Fetching 30d sales…', 'info');
+      // DRR — sequential (heavy job, avoid overwhelming Unicommerce server)
       const drr30Data = {};
       for (const fac of FACILITIES) drr30Data[fac] = await runJob(drrType, fac, forceFullFetch === true);
 
