@@ -44,7 +44,7 @@ function isDeclining(r) {
 }
 
 // ── Forecast (30-day based, weighted DRR) ─────────────────────────────────────
-var LEAD_DAYS_DEFAULT = 7;
+var LEAD_DAYS_DEFAULT = 15; // Safety stock lead time default
 
 function weightedDRR(r) {
   // Weighted: recent sales matter more. 7d=50%, 15d=30%, 30d=20%
@@ -949,7 +949,7 @@ export default function Dashboard() {
                   <thead><tr>
                     <th>Action</th><th>SKU</th><th>Item</th>
                     <th className="r" title="Sales in last 24h" style={{color:'var(--amber)'}}>1D SALES</th><th className="r">7d DRR</th><th className="r">15d DRR</th><th className="r">30d DRR</th>
-                    <th className="r">DOC</th><th className="r">Inventory</th><th>Open POs</th>
+                    <th className="r">DOC</th><th className="r">Inventory</th><th className="r" title="Safety Stock = DRR Max × 15 days" style={{color:'var(--purple)'}}>Safety Stock</th><th>Open POs</th>
                   </tr></thead>
                   <tbody>
                     {skuPanelItems.map((r, i) => {
@@ -964,6 +964,9 @@ export default function Dashboard() {
                           <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr30)}</td>
                           <td className="r"><DocBadge doc={r.doc} /></td>
                           <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.inv.toLocaleString()}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--purple)' }}>
+                            {rnd((r.drrMax||0) * 15).toLocaleString()}
+                          </td>
                           <td><POCell r={r} poBySkuMap={poBySkuMap} onOpen={(sku, name) => setPoPanel({ sku, name })} /></td>
                         </tr>
                       );
@@ -1389,6 +1392,7 @@ export default function Dashboard() {
                         <th className="r">7D</th>
                         <th className="r">30D</th>
                         <th className="r">INV</th>
+                        <th className="r" title="Safety Stock = DRR Max × 15 days" style={{color:'var(--purple)'}}>SAFETY STOCK</th>
                         <th className="r">DOC</th>
                         <th className="r">STOCKOUT</th>
                         <th className="r">REORDER BY</th>
@@ -1428,6 +1432,7 @@ export default function Dashboard() {
                                 color:r.drr7>r.drr30?'var(--amber-mid)':'var(--text3)'}}>{rnd(r.drr7)}</td>
                             <td className="r" style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text3)'}}>{rnd(r.drr30)}</td>
                             <td className="r" style={{fontFamily:'var(--mono)'}}>{r.inv.toLocaleString()}</td>
+                            <td className="r" style={{fontFamily:'var(--mono)',fontWeight:600,color:'var(--purple)'}}>{rnd((r.drrMax||0)*15).toLocaleString()}</td>
                             <td className="r"><DocBadge doc={r.wdoc} /></td>
                             <td className="r" style={{fontFamily:'var(--mono)',fontSize:11,
                                 color:r.wdoc<15?'var(--red-mid)':'var(--text2)'}}>{r.stockoutDate}</td>
