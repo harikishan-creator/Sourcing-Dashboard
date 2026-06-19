@@ -44,7 +44,7 @@ function isDeclining(r) {
 }
 
 // ── Forecast (30-day based, weighted DRR) ─────────────────────────────────────
-var LEAD_DAYS_DEFAULT = 15; // Safety stock lead time default
+var LEAD_DAYS_DEFAULT = 10; // Safety stock lead time default
 
 function weightedDRR(r) {
   // Weighted: recent sales matter more. 7d=50%, 15d=30%, 30d=20%
@@ -741,12 +741,7 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="top-right">
-            <button className="btn-refresh" onClick={() => fetchAll('quick')} disabled={loading}
-              title="Quick Refresh — last 48h sales (~1.7 min). Fresh 7d DRR + 1D sales."
-              style={{fontSize:11,padding:'7px 10px'}}>
-              <i className={`ti ${loading ? 'ti-loader-2 spin' : 'ti-clock'}`} style={{fontSize:13}} />
-              {loading ? 'Fetching…' : 'Quick Refresh (48h)'}
-            </button>
+            
             <button className="btn-refresh" onClick={async () => {
               try { await fetch('/api/uniware',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'invalidate_cache'})}); } catch(e) {}
               fetchAll(true);
