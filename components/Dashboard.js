@@ -439,6 +439,7 @@ export default function Dashboard() {
               total:n(r['Total']),
               status:(r['Purchase Order Status']||'COMPLETE').toUpperCase().replace(/ /g,'_'),
               itemName:(r['Item Type Name']||sku).trim(), facility: fac,
+              createdBy:(r['PO Created By']||'—').trim().split('@')[0].replace(/\./g,' ').replace(/\b\w/g, c=>c.toUpperCase()),
             });
           });
         }
@@ -1089,10 +1090,10 @@ export default function Dashboard() {
                 ? <div className="empty-state"><i className="ti ti-clipboard-off" /><p>{loading ? 'Loading POs from Uniware…' : 'No PO data — click Refresh'}</p></div>
                 : (
                   <table className="po-tbl">
-                    <thead><tr><th>PO code</th><th>SKU</th><th>Item</th><th>Category</th><th>Vendor</th><th>PO date</th><th>Delivery</th><th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th><th style={{ textAlign: 'right' }}>Rejected</th><th style={{ textAlign: 'right' }}>Pending</th><th style={{ textAlign: 'right' }}>Unit Price</th><th style={{ textAlign: 'right' }}>Total</th><th>Ageing</th><th>Progress</th><th>Status</th></tr></thead>
+                    <thead><tr><th>PO code</th><th>SKU</th><th>Item</th><th>Category</th><th>Vendor</th><th>Created By</th><th>PO date</th><th>Delivery</th><th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th><th style={{ textAlign: 'right' }}>Rejected</th><th style={{ textAlign: 'right' }}>Pending</th><th style={{ textAlign: 'right' }}>Unit Price</th><th style={{ textAlign: 'right' }}>Total</th><th>Ageing</th><th>Progress</th><th>Status</th></tr></thead>
                     <tbody>
                       {filteredPO.length === 0
-                        ? <tr><td colSpan={16} style={{ textAlign: 'center', padding: 24, color: 'var(--text3)', fontSize: 12, fontFamily: 'var(--mono)' }}>no matching records</td></tr>
+                        ? <tr><td colSpan={17} style={{ textAlign: 'center', padding: 24, color: 'var(--text3)', fontSize: 12, fontFamily: 'var(--mono)' }}>no matching records</td></tr>
                         : filteredPO.map((r, i) => {
                             const pct = r.ordered > 0 ? Math.round((r.rcvd / r.ordered) * 100) : 0;
                             return (
@@ -1102,6 +1103,7 @@ export default function Dashboard() {
                                 <td style={{ fontSize: 11, color: 'var(--text2)', maxWidth: 140 }}>{invMap[r.sku] || r.itemName || '—'}</td>
                                 <td style={{ fontSize: 11, color: 'var(--text3)' }}>{r.category || '—'}</td>
                                 <td style={{ fontSize: 11, color: 'var(--text2)' }}>{r.vendor}</td>
+                                <td style={{ fontSize: 11, color: 'var(--blue)', fontWeight: 500 }}>{r.createdBy || '—'}</td>
                                 <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.poDate}</td>
                                 <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.delDate}</td>
                                 <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.ordered.toLocaleString()}</td>
