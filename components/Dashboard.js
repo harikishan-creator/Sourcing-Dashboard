@@ -439,6 +439,7 @@ export default function Dashboard() {
               total:n(r['Total']),
               status:(r['Purchase Order Status']||'COMPLETE').toUpperCase().replace(/ /g,'_'),
               itemName:(r['Item Type Name']||sku).trim(), facility: fac,
+              createdBy:(r['PO Created By']||'—').trim().split('@')[0].replace(/\./g,' ').replace(/\b\w/g, c=>c.toUpperCase()),
             });
           });
         }
@@ -1089,7 +1090,7 @@ export default function Dashboard() {
                 ? <div className="empty-state"><i className="ti ti-clipboard-off" /><p>{loading ? 'Loading POs from Uniware…' : 'No PO data — click Refresh'}</p></div>
                 : (
                   <table className="po-tbl">
-                    <thead><tr><th>PO code</th><th>SKU</th><th>Item</th><th>Category</th><th>Vendor</th><th>PO date</th><th>Delivery</th><th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th><th style={{ textAlign: 'right' }}>Rejected</th><th style={{ textAlign: 'right' }}>Pending</th><th style={{ textAlign: 'right' }}>Unit Price</th><th style={{ textAlign: 'right' }}>Total</th><th>Ageing</th><th>Progress</th><th>Status</th></tr></thead>
+                    <thead><tr><th>PO code</th><th>SKU</th><th>Item</th><th>Vendor</th><th>PO date</th><th>Delivery</th><th style={{ textAlign: 'right' }}>Ordered</th><th style={{ textAlign: 'right' }}>Received</th><th style={{ textAlign: 'right' }}>Rejected</th><th style={{ textAlign: 'right' }}>Pending</th><th style={{ textAlign: 'right' }}>Unit Price</th><th style={{ textAlign: 'right' }}>Total</th><th>Ageing</th><th>Progress</th><th>Status</th><th>Created By</th></tr></thead>
                     <tbody>
                       {filteredPO.length === 0
                         ? <tr><td colSpan={16} style={{ textAlign: 'center', padding: 24, color: 'var(--text3)', fontSize: 12, fontFamily: 'var(--mono)' }}>no matching records</td></tr>
@@ -1100,7 +1101,6 @@ export default function Dashboard() {
                                 <td><span className="po-code-pill">{r.po}</span></td>
                                 <td><span className="sku-code">{r.sku}</span></td>
                                 <td style={{ fontSize: 11, color: 'var(--text2)', maxWidth: 140 }}>{invMap[r.sku] || r.itemName || '—'}</td>
-                                <td style={{ fontSize: 11, color: 'var(--text3)' }}>{r.category || '—'}</td>
                                 <td style={{ fontSize: 11, color: 'var(--text2)' }}>{r.vendor}</td>
                                 <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.poDate}</td>
                                 <td style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.delDate}</td>
@@ -1113,6 +1113,7 @@ export default function Dashboard() {
                                 <td style={{ textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: r.ageing > 30 ? 'var(--red-mid)' : 'var(--text3)' }}>{r.ageing || '—'}d</td>
                                 <td><div className="pct-lbl">{pct}%</div><div className="prog-track"><div className="prog-fill" style={{ width: `${pct}%` }} /></div></td>
                                 <td><StatusPill status={r.status} /></td>
+                                <td style={{ fontSize: 11, color: 'var(--blue)', fontWeight: 500 }}>{r.createdBy || '—'}</td>
                               </tr>
                             );
                           })}
