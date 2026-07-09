@@ -481,25 +481,20 @@ export default function Dashboard() {
 
       // All 3 DRR windows from the single 30d export — saves 8 export jobs
       // Build DRR maps — MSKT_FZP may come from Redis cache (pre-computed)
-      const msktData = drr30Data['MSKT_FZP'];
-      let msktDrr7 = {}, msktDrr15 = {}, msktDrr30 = {};
-      if (msktData && msktData.__fromCache && msktData.drrMap) {
-        // Pre-computed maps from Redis — extract directly
-        Object.entries(msktData.drrMap).forEach(([sku, v]) => {
-          msktDrr7[sku]  = v.d7  || 0;
-          msktDrr15[sku] = v.d15 || 0;
-          msktDrr30[sku] = v.d30 || 0;
-        });
-        showToast('⚡ MSKT_FZP DRR from shared cache', 'ok');
-      } else {
-        msktDrr7  = calcDRR(msktData, 7);
-        msktDrr15 = calcDRR(msktData, 15);
-        msktDrr30 = calcDRR(msktData, 30);
-      }
-      const otherFacs = FACILITIES.filter(f => f !== 'MSKT_FZP');
-      const drr7Map  = merge(msktDrr7,  ...otherFacs.map(f => calcDRR(drr30Data[f], 7)));
-      const drr15Map = merge(msktDrr15, ...otherFacs.map(f => calcDRR(drr30Data[f], 15)));
-      const drr30Map = merge(msktDrr30, ...otherFacs.map(f => calcDRR(drr30Data[f], 30)));
+      // Build DRR maps — ANY facility may return pre-computed maps ({__fromCache, drrMap})
+      // or raw rows (array). Handle both per-facility to avoid calcDRR crashing on objects.
+      const drrForWindow = (data, win) => {
+        if (data && data.__fromCache && data.drrMap) {
+          const key = win === 7 ? 'd7' : win === 15 ? 'd15' : 'd30';
+          const m = {};
+          Object.entries(data.drrMap).forEach(([sku, v]) => { m[sku] = v[key] || 0; });
+          return m;
+        }
+        return calcDRR(data, win);
+      };
+      const drr7Map  = merge(...FACILITIES.map(f => drrForWindow(drr30Data[f], 7)));
+      const drr15Map = merge(...FACILITIES.map(f => drrForWindow(drr30Data[f], 15)));
+      const drr30Map = merge(...FACILITIES.map(f => drrForWindow(drr30Data[f], 30)));
       // Last 1 day sales — count rows from LAST 24 HOURS only (no division)
       const calcLast1d = (rows) => {
         const cutoff = Date.now() - 86400000; // exactly 24 hours
@@ -512,15 +507,16 @@ export default function Dashboard() {
         });
         return c;
       };
-      // last1d: use cached d1 for MSKT_FZP, calcLast1d from raw rows for others
-      const msktLast1d = {};
-      if (msktData && msktData.__fromCache && msktData.drrMap) {
-        Object.entries(msktData.drrMap).forEach(([sku, v]) => { msktLast1d[sku] = v.d1 || 0; });
-      }
-      const last1dMaps = FACILITIES
-        .filter(f => !(f === 'MSKT_FZP' && drr30Data[f] && drr30Data[f].__fromCache))
-        .map(f => calcLast1d(drr30Data[f]));
-      const last1dMap = merge(msktLast1d, ...last1dMaps);
+      // last1d: use cached d1 if facility came from cache, else calcLast1d from raw rows
+      const last1dForFac = (data) => {
+        if (data && data.__fromCache && data.drrMap) {
+          const m = {};
+          Object.entries(data.drrMap).forEach(([sku, v]) => { m[sku] = v.d1 || 0; });
+          return m;
+        }
+        return calcLast1d(data);
+      };
+      const last1dMap = merge(...FACILITIES.map(f => last1dForFac(drr30Data[f])));
 
       const skuMap = new Map();
       FACILITIES.forEach(fac => {
