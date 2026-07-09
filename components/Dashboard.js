@@ -388,8 +388,12 @@ export default function Dashboard() {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ action: 'download', url: pd.url, type, facility }),
             });
-            const { rows } = await d.json();
-            return rows || [];
+            const dlData = await d.json();
+            // DRR download returns pre-computed maps (big facilities send no raw rows)
+            if (dlData.fromComputed && dlData.drrMap) {
+              return { __fromCache: true, drrMap: dlData.drrMap };
+            }
+            return dlData.rows || [];
           }
           if (pd.status === 'FAILED') return [];
         }
@@ -508,11 +512,15 @@ export default function Dashboard() {
         });
         return c;
       };
-      // last1d: skip MSKT_FZP if it came from cache (no raw rows)
+      // last1d: use cached d1 for MSKT_FZP, calcLast1d from raw rows for others
+      const msktLast1d = {};
+      if (msktData && msktData.__fromCache && msktData.drrMap) {
+        Object.entries(msktData.drrMap).forEach(([sku, v]) => { msktLast1d[sku] = v.d1 || 0; });
+      }
       const last1dMaps = FACILITIES
         .filter(f => !(f === 'MSKT_FZP' && drr30Data[f] && drr30Data[f].__fromCache))
         .map(f => calcLast1d(drr30Data[f]));
-      const last1dMap = merge(...last1dMaps);
+      const last1dMap = merge(msktLast1d, ...last1dMaps);
 
       const skuMap = new Map();
       FACILITIES.forEach(fac => {
