@@ -524,6 +524,7 @@ export default function Dashboard() {
             const e = skuMap.get(sku);
             e.inv += inv;
             e.openPO += parseFloat(r['Open Purchase']||0);
+            if (r['Updated'] && (!e.updated || r['Updated'].trim() > e.updated)) e.updated = r['Updated'].trim();
             // Update vendor fields if not yet set
             if (!e.primaryVendor) e.primaryVendor = (r['Primary Vendor']||'').trim();
             if (!e.needAfterOpenPO) e.needAfterOpenPO = Math.max(0, parseFloat(r['Need After Open Po']||r['Need After Open PO']||0));
@@ -532,6 +533,7 @@ export default function Dashboard() {
               sku, name:(r['Item Type Name']||sku).trim(),
               cat: SKU_CAT_MAP[sku], inv,
               openPO:parseFloat(r['Open Purchase']||0),
+              updated:(r['Updated']||'').trim(),
               drr7:0, drr15:0, drr30:0, drrMax:0, doc:0,
               primaryVendor:   (r['Primary Vendor']||'').trim(),
               secondaryVendor: (r['Secondary Vendor']||'').trim(),
@@ -548,6 +550,17 @@ export default function Dashboard() {
         item.drr7=d7; item.drr15=d15; item.drr30=d30; item.drrMax=dMax;
         item.last1d = rnd(last1dMap[sku] || 0);
         item.doc = dMax>0 ? rnd(item.inv/dMax) : (item.inv>0 ? 999 : 0);
+        // Sales spike ratio (7d DRR vs 30d DRR)
+        item.spikeRatio = d30 > 0 ? +(d7/d30).toFixed(2) : (d7>0 ? 99 : 0);
+        // OOS ageing: days since inventory last changed (proxy for days out of stock)
+        if (item.inv <= 0 && item.updated) {
+          const u = new Date(item.updated.split(' ')[0]);
+          item.daysOOS = isNaN(u) ? 0 : Math.max(0, Math.round((Date.now() - u.getTime())/86400000));
+        } else {
+          item.daysOOS = 0;
+        }
+        // Lost sales estimate = DRR Max × days OOS
+        item.lostSales = (item.inv <= 0 && dMax > 0) ? dMax * item.daysOOS : 0;
       });
 
       const inventory = Array.from(skuMap.values());
@@ -604,6 +617,10 @@ export default function Dashboard() {
     .map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) }))
     .sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
   var _declQ   = tabSearch.toLowerCase();
+  // Out of Stock: inventory = 0 AND recent sales (DRR > 0), sorted by lost sales desc
+  var oosItems = whitelistedInv
+    .filter(r => r.inv <= 0 && r.drrMax > 0)
+    .sort((a, b) => (b.lostSales || 0) - (a.lostSales || 0));
   var declining   = whitelistedInv.filter(isDeclining)
     .filter(r => !_declQ || r.sku.toLowerCase().includes(_declQ) || r.name.toLowerCase().includes(_declQ))
     .map(r => ({ ...r, dropRatio: r.drr30 > 0 ? rnd((1 - r.drr7 / r.drr30) * 100) : 0 }))
@@ -825,6 +842,7 @@ export default function Dashboard() {
               { lbl: 'Overstock/Liquidate',  val: ovs, sub: 'doc 61–180 days',   cls: 'c-blue',   icon: 'ti-archive',        tab: 'doc',     docFilter: 'overstock'   },
               { lbl: 'Dead stock',           val: ds,  sub: 'doc > 180 days',    cls: 'c-teal',   icon: 'ti-ban',            tab: 'doc',     docFilter: 'deadstock'   },
               { lbl: 'Sales spikes',         val: sp,  sub: '7d drr ≥ 1.5× 30d',cls: 'c-amber',  icon: 'ti-flame',          tab: 'spikes'                           },
+              { lbl: 'Out of Stock',         val: oosItems.length, sub: 'inv=0 · has sales', cls: 'c-red', icon: 'ti-box-off',    tab: 'oos'                              },
               { lbl: 'Open PO lines',        val: ol,  sub: 'pending delivery',  cls: 'c-green',  icon: 'ti-clipboard-list', tab: 'po'                               },
             ].map(c => (
               <div key={c.lbl} className={`mc ${c.cls}`}
@@ -860,6 +878,7 @@ export default function Dashboard() {
             { id: 'po',     icon: 'ti-clipboard-list', label: 'Open POs'    },
             { id: 'spikes', icon: 'ti-flame',          label: 'Sales spikes'},
             { id: 'declining', icon: 'ti-trending-down', label: 'Declining'   },
+            { id: 'oos',    icon: 'ti-box-off',        label: 'Out of Stock'},
             { id: 'forecast',  icon: 'ti-crystal-ball',  label: 'Forecast'    },
           ].map(t => (
             <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); setTabSearch(''); setForecastFilter(''); setDocFilter(''); }}>
@@ -869,7 +888,7 @@ export default function Dashboard() {
         </div>
 
         {/* SEARCH BAR */}
-        {['doc','spikes','declining'].includes(activeTab) && (
+        {['doc','spikes','declining','oos'].includes(activeTab) && (
           <div style={{position:'relative',marginBottom:'0.5rem',maxWidth:340}}>
             <i className="ti ti-search" style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',
               color:'var(--text3)',fontSize:13,pointerEvents:'none'}} />
@@ -1256,6 +1275,83 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+        {activeTab === 'oos' && (() => {
+          const q = tabSearch.trim().toLowerCase();
+          const rows = q ? oosItems.filter(r => r.sku.toLowerCase().includes(q) || (r.name||'').toLowerCase().includes(q)) : oosItems;
+          const totalLost = rows.reduce((s, r) => s + (r.lostSales||0), 0);
+          const ageBadge = (d) => {
+            const bg = d > 30 ? 'var(--red-dim)' : d > 14 ? 'var(--amber-dim)' : 'var(--bg3)';
+            const col = d > 30 ? 'var(--red-mid)' : d > 14 ? 'var(--amber-mid)' : 'var(--text2)';
+            return <span style={{ background: bg, color: col, padding: '2px 7px', borderRadius: 4, fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 600 }}>{d}d</span>;
+          };
+          return (
+          <div className="card">
+            <div className="card-head">
+              <span className="card-title">
+                <i className="ti ti-box-off" style={{ fontSize: 15, color: 'var(--red-mid)' }} />
+                Out of Stock
+                <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400, marginLeft: 8 }}>inventory = 0 with recent sales — ranked by estimated lost sales</span>
+              </span>
+              <span className="card-chip">{rows.length} skus</span>
+              <span style={{ fontSize: 12, color: 'var(--red-mid)', fontWeight: 600, marginLeft: 8 }}>~{totalLost.toLocaleString()} units lost</span>
+              <div style={{position:'relative',minWidth:200,maxWidth:260}}>
+                <i className="ti ti-search" style={{position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',color:'var(--text3)',fontSize:12,pointerEvents:'none'}} />
+                <input type="text" placeholder="Search SKU or name…" value={tabSearch}
+                  onChange={e => setTabSearch(e.target.value)}
+                  style={{width:'100%',padding:'5px 26px 5px 26px',border:'1px solid var(--border)',borderRadius:7,fontFamily:'var(--mono)',fontSize:11,background:'var(--bg2)',color:'var(--text)',outline:'none'}} />
+                {tabSearch && <button onClick={()=>setTabSearch('')} style={{position:'absolute',right:7,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:13,lineHeight:1,padding:0}}>×</button>}
+              </div>
+            </div>
+            {rows.length === 0
+              ? <div className="empty-state"><i className="ti ti-box-off" /><p>{loading ? 'Loading…' : 'No out-of-stock items with recent sales'}</p></div>
+              : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="detail">
+                    <thead>
+                      <tr>
+                        <th>SKU</th>
+                        <th>ITEM</th>
+                        <th>CATEGORY</th>
+                        <th className="r" title="Sales in last 24h" style={{color:'var(--amber)'}}>1D SALES</th>
+                        <th className="r" title="7d DRR ÷ 30d DRR">SPIKE RATIO</th>
+                        <th className="r">7D DRR</th>
+                        <th className="r">30D DRR</th>
+                        <th className="r">DRR MAX</th>
+                        <th className="r" title="Days since inventory hit 0 (from last stock update)">DAYS OOS</th>
+                        <th className="r" title="Since (last inventory update date)">OOS SINCE</th>
+                        <th className="r" title="Estimated lost sales = DRR Max × Days OOS" style={{color:'var(--red-mid)'}}>LOST SALES</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((r, i) => (
+                        <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'var(--bg3)' }}>
+                          <td><span className="sku-badge">{r.sku}</span></td>
+                          <td style={{ fontWeight: 500 }}>{r.name}</td>
+                          <td style={{ color: 'var(--text3)', fontSize: 11 }}>{r.cat}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: (r.last1d||0)>0?'var(--green)':'var(--text3)' }}>{r.last1d||0}</td>
+                          <td className="r">
+                            <span style={{
+                              background: r.spikeRatio >= 1.5 ? 'var(--amber-dim)' : 'var(--bg3)',
+                              color: r.spikeRatio >= 1.5 ? 'var(--amber-mid)' : 'var(--text2)',
+                              padding: '2px 7px', borderRadius: 4, fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 600
+                            }}>{r.spikeRatio >= 99 ? 'NEW' : r.spikeRatio + '×'}</span>
+                          </td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr7)}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{rnd(r.drr30)}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{rnd(r.drrMax)}</td>
+                          <td className="r">{ageBadge(r.daysOOS || 0)}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)' }}>{r.updated ? r.updated.split(' ')[0] : '—'}</td>
+                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--red-mid)' }}>{(r.lostSales||0).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+          </div>
+          );
+        })()}
 
         {activeTab === 'forecast' && (
           <div className="card">
