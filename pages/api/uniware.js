@@ -11,7 +11,7 @@
  * Manual "Full Fetch" button bypasses cache (forceRefresh=true).
  */
 
-import { init, triggerJob, pollJob, downloadCSV, mcpRaw } from '../../lib/mcpClient';
+import { init, triggerJob, pollJob, downloadCSV } from '../../lib/mcpClient';
 import { Redis } from '@upstash/redis';
 
 export const config = { maxDuration: 60 };
@@ -36,7 +36,7 @@ function getRedis() {
 }
 
 function cacheKey(type, facility) {
-  return `inv_cache_v3_${type}_${facility}`;
+  return `inv_cache_v4_${type}_${facility}`;
 }
 
 // Compute DRR maps from raw rows (runs server-side, returns compact map)
@@ -64,6 +64,19 @@ function computeDRRMaps(rows) {
       d30: Math.round((c30[s] || 0) / 30),
       d1:  c1[s] || 0,   // last 24h sales count (no division)
     };
+  });
+  return map;
+}
+
+// Count UNFULFILLABLE sale-order-items per SKU (for the Unfulfillable report)
+function computeUnfulfillable(rows) {
+  const map = {};   // sku -> { name, count }
+  (rows || []).forEach(r => {
+    if ((r['Sale Order Item Status'] || '').trim().toUpperCase() !== 'UNFULFILLABLE') return;
+    const s = (r['Item SKU Code'] || r['Item SkuCode'] || '').trim();
+    if (!s) return;
+    if (!map[s]) map[s] = { name: (r['Item Type Name'] || s).trim(), count: 0 };
+    map[s].count += 1;
   });
   return map;
 }
@@ -117,6 +130,7 @@ export default async function handler(req, res) {
                 jobCode:  'KV_CACHED',
                 facility, type,
                 drrMap:   cached.drrMap,
+                unfMap:   cached.unfMap || {},
                 cachedAt: cached.ts,
                 ageMin,
               });
@@ -157,28 +171,30 @@ export default async function handler(req, res) {
       // For DRR: compute maps server-side. For big facilities (MSKT_FZP ~600k rows)
       // return ONLY the computed map — never ship raw rows to the client.
       const isDRR = (type === 'drr30' || type === 'drr48h');
-      let drrMap = null;
-      if (isDRR) drrMap = computeDRRMaps(rows);
+      let drrMap = null, unfMap = null;
+      if (isDRR) {
+        drrMap = computeDRRMaps(rows);
+        unfMap = computeUnfulfillable(rows);   // SKU -> {name, count} of UNFULFILLABLE items
+      }
 
-      // Save to Redis cache (store map for DRR; skip raw rows if too large)
+      // Save to Redis cache (store maps for DRR; skip raw rows if too large)
       const r = getRedis();
       if (r) {
         try {
           const ttl = TTL[type] || 3600;
           const tooBig = rows.length > 50000;
           const payload = isDRR
-            ? { drrMap, ts: Date.now(), rowCount: rows.length }        // DRR: cache map only
+            ? { drrMap, unfMap, ts: Date.now(), rowCount: rows.length }   // DRR: cache maps only
             : (tooBig ? { rows: [], ts: Date.now() } : { rows, ts: Date.now() });
           await r.set(cacheKey(type, facility), payload, { ex: ttl });
           console.log(`[Redis] CACHED ${type}/${facility} — ${isDRR ? Object.keys(drrMap).length+' skus' : rows.length+' rows'}, TTL ${ttl}s`);
         } catch(e) { console.warn('[Redis] Write error:', e.message); }
       }
 
-      // Return computed map for DRR (tiny), or raw rows for inventory/po
+      // Return computed maps for DRR (tiny), or raw rows for inventory/po
       if (isDRR) {
-        // Big facility: don't ship 600k rows. Small facility: rows are cheap, send both.
-        if (rows.length > 50000) return res.status(200).json({ rows: [], drrMap, fromComputed: true });
-        return res.status(200).json({ rows, drrMap, fromComputed: true });
+        if (rows.length > 50000) return res.status(200).json({ rows: [], drrMap, unfMap, fromComputed: true });
+        return res.status(200).json({ rows, drrMap, unfMap, fromComputed: true });
       }
       return res.status(200).json({ rows });
     }
@@ -214,19 +230,7 @@ export default async function handler(req, res) {
     }
 
     // ── INVALIDATE CACHE ──────────────────────────────────────────────────────
-    if (action === 'list_tools') {
-      const tools = await mcpRaw('tools/list', {});
-      return res.status(200).json(tools);
-    }
-
-    // Generic MCP tool call (discovery)
-    if (action === 'mcp_call') {
-      const { tool, args } = req.body || {};
-      const result = await mcpRaw('tools/call', { name: tool, arguments: args || {} });
-      return res.status(200).json(result);
-    }
-
-    if (action === 'invalidate_cache') {
+if (action === 'invalidate_cache') {
       const r = getRedis();
       if (r) {
         const FACILITIES = ['astrotalk', 'MSKT_FZP', 'Emiza_MMB', 'AT_global'];
