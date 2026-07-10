@@ -215,7 +215,6 @@ export default function Dashboard() {
   const [status,    setStatus]    = useState('idle'); // idle | loading | ok | error
 
   const [activeTab,   setActiveTab]   = useState('doc');
-  const [unfData,     setUnfData]     = useState([]); // Unfulfillable items (all SKUs)
   const [leadDays,    setLeadDays]    = useState(LEAD_DAYS_DEFAULT);
   const [forecastFilter, setForecastFilter] = useState('');
   const [forecastSubTab, setForecastSubTab] = useState('table'); // 'table' | 'vendor' | 'today' | '7d' | '15d'
@@ -368,8 +367,8 @@ export default function Dashboard() {
         if (jobCode === 'KV_CACHED') {
           const ageMin = cachedAt ? Math.round((Date.now() - cachedAt) / 60000) : '?';
           showToast(`⚡ ${type}/${facility} from shared cache (${ageMin}m old)`, 'ok');
-          // DRR hit — return drrMap + unfMap markers
-          if (drrMap) return { __fromCache: true, drrMap, unfMap: trigData.unfMap || {} };
+          // DRR hit — return drrMap marker
+          if (drrMap) return { __fromCache: true, drrMap };
           // Inventory/PO hit — return rows directly
           if (trigData.rows !== undefined) return trigData.rows;
           return [];
@@ -392,7 +391,7 @@ export default function Dashboard() {
             const dlData = await d.json();
             // DRR download returns pre-computed maps (big facilities send no raw rows)
             if (dlData.fromComputed && dlData.drrMap) {
-              return { __fromCache: true, drrMap: dlData.drrMap, unfMap: dlData.unfMap || {} };
+              return { __fromCache: true, drrMap: dlData.drrMap };
             }
             return dlData.rows || [];
           }
@@ -496,27 +495,6 @@ export default function Dashboard() {
       const drr7Map  = merge(...FACILITIES.map(f => drrForWindow(drr30Data[f], 7)));
       const drr15Map = merge(...FACILITIES.map(f => drrForWindow(drr30Data[f], 15)));
       const drr30Map = merge(...FACILITIES.map(f => drrForWindow(drr30Data[f], 30)));
-      // ── Unfulfillable map: merge SKU -> {name, count} across facilities ──
-      const unfMerged = {}; // sku -> {name, count}
-      FACILITIES.forEach(f => {
-        const data = drr30Data[f];
-        if (data && data.__fromCache && data.unfMap) {
-          // pre-computed from server
-          Object.entries(data.unfMap).forEach(([sku, v]) => {
-            if (!unfMerged[sku]) unfMerged[sku] = { name: v.name || sku, count: 0 };
-            unfMerged[sku].count += (v.count || 0);
-          });
-        } else if (Array.isArray(data)) {
-          // raw rows — count UNFULFILLABLE SOI locally
-          data.forEach(r => {
-            if ((r['Sale Order Item Status'] || '').trim().toUpperCase() !== 'UNFULFILLABLE') return;
-            const sku = (r['Item SKU Code'] || r['Item SkuCode'] || '').trim();
-            if (!sku) return;
-            if (!unfMerged[sku]) unfMerged[sku] = { name: (r['Item Type Name'] || sku).trim(), count: 0 };
-            unfMerged[sku].count += 1;
-          });
-        }
-      });
       // Last 1 day sales — count rows from LAST 24 HOURS only (no division)
       const calcLast1d = (rows) => {
         const cutoff = Date.now() - 86400000; // exactly 24 hours
@@ -576,38 +554,11 @@ export default function Dashboard() {
         item.drr7=d7; item.drr15=d15; item.drr30=d30; item.drrMax=dMax;
         item.last1d = rnd(last1dMap[sku] || 0);
         item.doc = dMax>0 ? rnd(item.inv/dMax) : (item.inv>0 ? 999 : 0);
-        // Sales spike ratio (7d DRR vs 30d DRR)
-        item.spikeRatio = d30 > 0 ? +(d7/d30).toFixed(2) : (d7>0 ? 99 : 0);
-        // OOS ageing: days since inventory last changed (proxy for days out of stock)
-        if (item.inv <= 0 && item.updated) {
-          const u = new Date(item.updated.split(' ')[0]);
-          item.daysOOS = isNaN(u) ? 0 : Math.max(0, Math.round((Date.now() - u.getTime())/86400000));
-        } else {
-          item.daysOOS = 0;
-        }
-        // Lost sales estimate = DRR Max × days OOS
-        item.lostSales = (item.inv <= 0 && dMax > 0) ? dMax * item.daysOOS : 0;
-      });
+              });
 
       const inventory = Array.from(skuMap.values());
 
-      // ── Build Unfulfillable dataset: join unfMerged with full inventory (B2C stock) ──
-      const invBySku = {};   // full inventory (all SKUs), summed across facilities
-      FACILITIES.forEach(f => {
-        (invData[f]||[]).forEach(r => {
-          const sku = (r['Item SkuCode']||r['Item SKU Code']||'').trim();
-          if (!sku) return;
-          invBySku[sku] = (invBySku[sku] || 0) + parseFloat(r['Inventory']||0);
-        });
-      });
-      const unfList = Object.entries(unfMerged).map(([sku, v]) => ({
-        sku,
-        name: v.name || sku,
-        orderCount: v.count,
-        b2cInv: invBySku[sku] != null ? invBySku[sku] : null,   // null = not tracked (shows —)
-      })).sort((a, b) => b.orderCount - a.orderCount);
-      setUnfData(unfList);
-
+      
       // Save to sessionStorage
       if (needFull) {
         try {
@@ -660,10 +611,7 @@ export default function Dashboard() {
     .map(r => ({ ...r, ratio: r.drr7 / r.drr30, priority: spikePriority(r) }))
     .sort((a, b) => a.priority - b.priority || b.ratio - a.ratio);
   var _declQ   = tabSearch.toLowerCase();
-  // Unfulfillable: SKUs with UNFULFILLABLE sale-order-items, from unfData state
-  var _unfQ = tabSearch.toLowerCase();
-  var unfItems = unfData
-    .filter(r => !_unfQ || r.sku.toLowerCase().includes(_unfQ) || (r.name||'').toLowerCase().includes(_unfQ));
+
   var declining   = whitelistedInv.filter(isDeclining)
     .filter(r => !_declQ || r.sku.toLowerCase().includes(_declQ) || r.name.toLowerCase().includes(_declQ))
     .map(r => ({ ...r, dropRatio: r.drr30 > 0 ? rnd((1 - r.drr7 / r.drr30) * 100) : 0 }))
@@ -885,8 +833,7 @@ export default function Dashboard() {
               { lbl: 'Overstock/Liquidate',  val: ovs, sub: 'doc 61–180 days',   cls: 'c-blue',   icon: 'ti-archive',        tab: 'doc',     docFilter: 'overstock'   },
               { lbl: 'Dead stock',           val: ds,  sub: 'doc > 180 days',    cls: 'c-teal',   icon: 'ti-ban',            tab: 'doc',     docFilter: 'deadstock'   },
               { lbl: 'Sales spikes',         val: sp,  sub: '7d drr ≥ 1.5× 30d',cls: 'c-amber',  icon: 'ti-flame',          tab: 'spikes'                           },
-              { lbl: 'Unfulfillable',        val: unfData.length,  sub: 'UNFULFILLABLE items',cls: 'c-red', icon: 'ti-alert-triangle', tab: 'unf'                          },
-              { lbl: 'Open PO lines',        val: ol,  sub: 'pending delivery',  cls: 'c-green',  icon: 'ti-clipboard-list', tab: 'po'                               },
+                { lbl: 'Open PO lines',        val: ol,  sub: 'pending delivery',  cls: 'c-green',  icon: 'ti-clipboard-list', tab: 'po'                               },
             ].map(c => (
               <div key={c.lbl} className={`mc ${c.cls}`}
                 onClick={() => {
@@ -921,7 +868,6 @@ export default function Dashboard() {
             { id: 'po',     icon: 'ti-clipboard-list', label: 'Open POs'    },
             { id: 'spikes', icon: 'ti-flame',          label: 'Sales spikes'},
             { id: 'declining', icon: 'ti-trending-down', label: 'Declining'   },
-            { id: 'unf',    icon: 'ti-alert-triangle', label: 'Unfulfillable'},
             { id: 'forecast',  icon: 'ti-crystal-ball',  label: 'Forecast'    },
           ].map(t => (
             <button key={t.id} className={`tb ${activeTab === t.id ? 'active' : ''}`} onClick={() => { setActiveTab(t.id); setSkuPanel(null); setPoPanel(null); setTabSearch(''); setForecastFilter(''); setDocFilter(''); }}>
@@ -931,7 +877,7 @@ export default function Dashboard() {
         </div>
 
         {/* SEARCH BAR */}
-        {['doc','spikes','declining','unf'].includes(activeTab) && (
+        {['doc','spikes','declining'].includes(activeTab) && (
           <div style={{position:'relative',marginBottom:'0.5rem',maxWidth:340}}>
             <i className="ti ti-search" style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',
               color:'var(--text3)',fontSize:13,pointerEvents:'none'}} />
@@ -1318,67 +1264,6 @@ export default function Dashboard() {
           </div>
         )}
       </div>
-
-        {activeTab === 'unf' && (() => {
-          const rows = unfItems;
-          const totalOrders = rows.reduce((s, r) => s + (r.orderCount||0), 0);
-          const invCell = (v) => {
-            if (v == null) return <span style={{ color: 'var(--text3)' }}>—</span>;
-            const low = v < 50;
-            return <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: low ? 'var(--red-mid)' : 'var(--text)' }}>{v.toLocaleString()}</span>;
-          };
-          return (
-          <div className="card">
-            <div className="card-head">
-              <span className="card-title">
-                <i className="ti ti-alert-triangle" style={{ fontSize: 15, color: 'var(--red-mid)' }} />
-                Unfulfillable Orders
-                <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400, marginLeft: 8 }}>sale-order items that can't be fulfilled — from Uniware, last 30 days</span>
-              </span>
-              <span className="card-chip">{rows.length} skus</span>
-              <span style={{ fontSize: 12, color: 'var(--red-mid)', fontWeight: 600, marginLeft: 8 }}>{totalOrders.toLocaleString()} orders</span>
-              <div style={{position:'relative',minWidth:200,maxWidth:260}}>
-                <i className="ti ti-search" style={{position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',color:'var(--text3)',fontSize:12,pointerEvents:'none'}} />
-                <input type="text" placeholder="Search SKU or name…" value={tabSearch}
-                  onChange={e => setTabSearch(e.target.value)}
-                  style={{width:'100%',padding:'5px 26px 5px 26px',border:'1px solid var(--border)',borderRadius:7,fontFamily:'var(--mono)',fontSize:11,background:'var(--bg2)',color:'var(--text)',outline:'none'}} />
-                {tabSearch && <button onClick={()=>setTabSearch('')} style={{position:'absolute',right:7,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:13,lineHeight:1,padding:0}}>×</button>}
-              </div>
-            </div>
-            {rows.length === 0
-              ? <div className="empty-state"><i className="ti ti-alert-triangle" /><p>{loading ? 'Loading…' : 'No unfulfillable orders'}</p></div>
-              : (
-                <div style={{ overflowX: 'auto' }}>
-                  <table className="detail">
-                    <thead>
-                      <tr>
-                        <th>ITEM NAME</th>
-                        <th>SKU CODE</th>
-                        <th className="r" title="Number of unfulfillable order line items">ORDER COUNT</th>
-                        <th className="r" title="Current B2C inventory available">B2C INVENTORY</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((r, i) => (
-                        <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'var(--bg3)' }}>
-                          <td style={{ fontWeight: 500 }}>{r.name}</td>
-                          <td><span className="sku-badge">{r.sku}</span></td>
-                          <td className="r" style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--red-mid)' }}>{(r.orderCount||0).toLocaleString()}</td>
-                          <td className="r">{invCell(r.b2cInv)}</td>
-                        </tr>
-                      ))}
-                      <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}>
-                        <td colSpan={2} style={{ textAlign: 'right', color: 'var(--text2)' }}>Grand Total</td>
-                        <td className="r" style={{ fontFamily: 'var(--mono)', color: 'var(--red-mid)' }}>{totalOrders.toLocaleString()}</td>
-                        <td></td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              )}
-          </div>
-          );
-        })()}
 
         {activeTab === 'forecast' && (
           <div className="card">
