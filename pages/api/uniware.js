@@ -219,6 +219,13 @@ export default async function handler(req, res) {
       return res.status(200).json(tools);
     }
 
+    // Generic MCP tool call (discovery)
+    if (action === 'mcp_call') {
+      const { tool, args } = req.body || {};
+      const result = await mcpRaw('tools/call', { name: tool, arguments: args || {} });
+      return res.status(200).json(result);
+    }
+
     if (action === 'invalidate_cache') {
       const r = getRedis();
       if (r) {
