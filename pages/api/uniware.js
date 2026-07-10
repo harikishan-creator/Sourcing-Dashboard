@@ -36,7 +36,7 @@ function getRedis() {
 }
 
 function cacheKey(type, facility) {
-  return `inv_cache_v4_${type}_${facility}`;
+  return `inv_cache_v5_${type}_${facility}`;
 }
 
 // Compute DRR maps from raw rows (runs server-side, returns compact map)
@@ -68,18 +68,7 @@ function computeDRRMaps(rows) {
   return map;
 }
 
-// Count UNFULFILLABLE sale-order-items per SKU (for the Unfulfillable report)
-function computeUnfulfillable(rows) {
-  const map = {};   // sku -> { name, count }
-  (rows || []).forEach(r => {
-    if ((r['Sale Order Item Status'] || '').trim().toUpperCase() !== 'UNFULFILLABLE') return;
-    const s = (r['Item SKU Code'] || r['Item SkuCode'] || '').trim();
-    if (!s) return;
-    if (!map[s]) map[s] = { name: (r['Item Type Name'] || s).trim(), count: 0 };
-    map[s].count += 1;
-  });
-  return map;
-}
+
 
 // Run a full job: trigger → poll → download → return rows
 async function runFullJob(type, facility) {
@@ -130,7 +119,6 @@ export default async function handler(req, res) {
                 jobCode:  'KV_CACHED',
                 facility, type,
                 drrMap:   cached.drrMap,
-                unfMap:   cached.unfMap || {},
                 cachedAt: cached.ts,
                 ageMin,
               });
@@ -171,11 +159,8 @@ export default async function handler(req, res) {
       // For DRR: compute maps server-side. For big facilities (MSKT_FZP ~600k rows)
       // return ONLY the computed map — never ship raw rows to the client.
       const isDRR = (type === 'drr30' || type === 'drr48h');
-      let drrMap = null, unfMap = null;
-      if (isDRR) {
-        drrMap = computeDRRMaps(rows);
-        unfMap = computeUnfulfillable(rows);   // SKU -> {name, count} of UNFULFILLABLE items
-      }
+      let drrMap = null;
+      if (isDRR) drrMap = computeDRRMaps(rows);
 
       // Save to Redis cache (store maps for DRR; skip raw rows if too large)
       const r = getRedis();
@@ -184,7 +169,7 @@ export default async function handler(req, res) {
           const ttl = TTL[type] || 3600;
           const tooBig = rows.length > 50000;
           const payload = isDRR
-            ? { drrMap, unfMap, ts: Date.now(), rowCount: rows.length }   // DRR: cache maps only
+            ? { drrMap, ts: Date.now(), rowCount: rows.length }   // DRR: cache map only
             : (tooBig ? { rows: [], ts: Date.now() } : { rows, ts: Date.now() });
           await r.set(cacheKey(type, facility), payload, { ex: ttl });
           console.log(`[Redis] CACHED ${type}/${facility} — ${isDRR ? Object.keys(drrMap).length+' skus' : rows.length+' rows'}, TTL ${ttl}s`);
@@ -193,8 +178,8 @@ export default async function handler(req, res) {
 
       // Return computed maps for DRR (tiny), or raw rows for inventory/po
       if (isDRR) {
-        if (rows.length > 50000) return res.status(200).json({ rows: [], drrMap, unfMap, fromComputed: true });
-        return res.status(200).json({ rows, drrMap, unfMap, fromComputed: true });
+        if (rows.length > 50000) return res.status(200).json({ rows: [], drrMap, fromComputed: true });
+        return res.status(200).json({ rows, drrMap, fromComputed: true });
       }
       return res.status(200).json({ rows });
     }
