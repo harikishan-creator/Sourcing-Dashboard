@@ -215,6 +215,21 @@ export default async function handler(req, res) {
     }
 
     // ── INVALIDATE CACHE ──────────────────────────────────────────────────────
+    // Diagnostic: test Redis connectivity
+    if (action === 'redis_ping') {
+      const r = getRedis();
+      const hasUrl = !!process.env.UPSTASH_REDIS_REST_URL;
+      const hasToken = !!process.env.UPSTASH_REDIS_REST_TOKEN;
+      if (!r) return res.status(200).json({ ok: false, redis: 'not_initialized', hasUrl, hasToken });
+      try {
+        await r.set('__ping_test', 'pong', { ex: 60 });
+        const val = await r.get('__ping_test');
+        return res.status(200).json({ ok: true, redis: 'connected', read: val, hasUrl, hasToken });
+      } catch (e) {
+        return res.status(200).json({ ok: false, redis: 'write_error', error: e.message, hasUrl, hasToken });
+      }
+    }
+
 if (action === 'invalidate_cache') {
       const r = getRedis();
       if (r) {
