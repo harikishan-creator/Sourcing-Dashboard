@@ -11,7 +11,7 @@
  * Manual "Full Fetch" button bypasses cache (forceRefresh=true).
  */
 
-import { init, triggerJob, pollJob, downloadCSV } from '../../lib/mcpClient';
+import { init, triggerJob, pollJob, downloadCSV, mcpRaw } from '../../lib/mcpClient';
 import { Redis } from '@upstash/redis';
 
 export const config = { maxDuration: 60 };
@@ -214,6 +214,11 @@ export default async function handler(req, res) {
     }
 
     // ── INVALIDATE CACHE ──────────────────────────────────────────────────────
+    if (action === 'list_tools') {
+      const tools = await mcpRaw('tools/list', {});
+      return res.status(200).json(tools);
+    }
+
     if (action === 'invalidate_cache') {
       const r = getRedis();
       if (r) {
