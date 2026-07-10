@@ -376,8 +376,8 @@ export default function Dashboard() {
 
         if (e || !jobCode) return [];
 
-        for (let i = 0; i < 25; i++) {
-          await new Promise(r => setTimeout(r, 3000));
+        for (let i = 0; i < 45; i++) {
+          await new Promise(r => setTimeout(r, 4000));
           const p = await fetch('/api/uniware', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'poll', jobCode, facility }),
