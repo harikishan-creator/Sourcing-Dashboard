@@ -13,8 +13,7 @@ Behaviour:
   3. Read the CURRENT SKU_CAT_MAP embedded in components/Dashboard.js.
   4. Diff -> report ADDED / CHANGED / (optionally) REMOVED SKUs.
   5. If anything changed, rewrite the inline `var SKU_CAT_MAP = {...};` in Dashboard.js.
-  6. Also write lib/skuMap.js for consistency.
-  7. Exit code 0 = no change, 10 = changes written, 1 = error.
+  6. Exit code 0 = no change, 10 = changes written, 1 = error.
 
 Any new SKU whose prefix is unknown is still mapped (via col C) but FLAGGED in the log
 so a human can confirm, and — if col C is also blank — parked as 'Uncategorised' and
@@ -133,7 +132,6 @@ def main():
     args = ap.parse_args()
 
     dash_path = os.path.join(args.repo, "components", "Dashboard.js")
-    skumap_path = os.path.join(args.repo, "lib", "skuMap.js")
 
     if not os.path.isfile(dash_path):
         log(f"ERROR: {dash_path} not found"); return 1
@@ -192,13 +190,6 @@ def main():
     new_src = write_map_into_dashboard(src, new_map, span)
     open(dash_path, "w", encoding="utf-8").write(new_src)
     log(f"\nUpdated {dash_path}")
-
-    # Write lib/skuMap.js too (kept consistent)
-    if os.path.isdir(os.path.dirname(skumap_path)):
-        payload = json.dumps(new_map, ensure_ascii=False, separators=(",", ":"))
-        open(skumap_path, "w", encoding="utf-8").write(
-            f"export const SKU_CAT_MAP = {payload};\n")
-        log(f"Updated {skumap_path}")
 
     log(f"\nDone. Map now has {len(new_map)} SKUs.")
     return 10
