@@ -44,6 +44,6 @@ jobs:
         run: |
           git config user.name  "sku-sync-bot"
           git config user.email "sku-sync-bot@users.noreply.github.com"
-          git add components/Dashboard.js lib/skuMap.js
+          git add components/Dashboard.js
           git commit -m "chore(sku): auto-sync SKU_CAT_MAP from Google Sheet [skip ci]"
           git push
