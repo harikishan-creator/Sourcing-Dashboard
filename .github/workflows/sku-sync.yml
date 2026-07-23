@@ -1,0 +1,49 @@
+name: Sync SKU map from Google Sheet
+
+# Runs the sync on a schedule and on manual trigger.
+# GitHub cron has no "on sheet change" hook, so we poll: every 30 min the job
+# fetches the published CSV, and only commits when columns A/B introduce a new
+# (or re-categorised) SKU. A no-change run is a cheap no-op.
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 minutes (UTC). Loosen to hourly/daily if you prefer.
+  workflow_dispatch: {}       # lets you run it on demand from the Actions tab
+
+permissions:
+  contents: write             # required so the workflow can commit the updated map
+
+concurrency:
+  group: sku-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run SKU sync
+        id: sync
+        run: |
+          set +e
+          python3 scripts/sync_sku_map.py --repo .
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          # 0 = no change, 10 = changes written, anything else = error
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          exit 0
+
+      - name: Commit & push if changed
+        if: steps.sync.outputs.exit_code == '10'
+        run: |
+          git config user.name  "sku-sync-bot"
+          git config user.email "sku-sync-bot@users.noreply.github.com"
+          git add components/Dashboard.js lib/skuMap.js
+          git commit -m "chore(sku): auto-sync SKU_CAT_MAP from Google Sheet [skip ci]"
+          git push
