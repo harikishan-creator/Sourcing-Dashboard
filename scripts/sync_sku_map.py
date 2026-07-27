@@ -56,6 +56,14 @@ SKU_EXCEPTIONS = {
     "BP_0411": "Crystal",
 }
 
+# Categories that must NEVER appear on the dashboard. Any SKU resolving to one of
+# these is skipped when adding AND pruned from the map if already present — so it
+# stays gone even though it still exists in the Google Sheet.
+EXCLUDED_CATEGORIES = {
+    "Acrylic",
+    "Lal Kitaab Remedy",
+}
+
 
 def log(msg): print(msg, flush=True)
 
@@ -100,6 +108,9 @@ def build_desired_map(rows):
         cat, source = resolve_category(sku, sheet_cat)
         # keep first occurrence; note dupes
         if sku in desired:
+            continue
+        if cat in EXCLUDED_CATEGORIES:
+            flags.append(("EXCLUDED", sku, name, f"category '{cat}' is blocklisted -> skipped"))
             continue
         desired[sku] = cat
         if source == "unknown":
@@ -173,6 +184,15 @@ def main():
     new_map.update(desired)              # add + update
     if args.allow_removals:
         for s in removed: new_map.pop(s, None)
+    # prune any blocklisted categories that may already be in the map
+    pruned = {k: v for k, v in new_map.items() if v in EXCLUDED_CATEGORIES}
+    for k in pruned:
+        new_map.pop(k, None)
+    if pruned:
+        log(f"\nPRUNED (blocklisted category): {len(pruned)}")
+        for k, v in sorted(pruned.items()):
+            log(f"   x {k:16} ({v})")
+
     # sort for stable diffs
     new_map = {k: new_map[k] for k in sorted(new_map.keys())}
 
