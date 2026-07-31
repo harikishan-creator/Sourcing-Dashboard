@@ -64,6 +64,12 @@ EXCLUDED_CATEGORIES = {
     "Lal Kitaab Remedy",
 }
 
+# Individual SKUs that must NEVER appear on the dashboard, regardless of category.
+# Skipped when adding AND pruned if already present, even though they remain in the sheet.
+EXCLUDED_SKUS = {
+    "F_1005",
+}
+
 
 def log(msg): print(msg, flush=True)
 
@@ -104,6 +110,9 @@ def build_desired_map(rows):
         name = norm(r.get("Item Type Name"))
         sheet_cat = norm(r.get("Category"))
         if not sku or sku.lower() == "nan":
+            continue
+        if sku in EXCLUDED_SKUS:
+            flags.append(("EXCLUDED", sku, name, "SKU is blocklisted -> skipped"))
             continue
         cat, source = resolve_category(sku, sheet_cat)
         # keep first occurrence; note dupes
@@ -184,8 +193,9 @@ def main():
     new_map.update(desired)              # add + update
     if args.allow_removals:
         for s in removed: new_map.pop(s, None)
-    # prune any blocklisted categories that may already be in the map
-    pruned = {k: v for k, v in new_map.items() if v in EXCLUDED_CATEGORIES}
+    # prune any blocklisted categories OR SKUs that may already be in the map
+    pruned = {k: v for k, v in new_map.items()
+              if v in EXCLUDED_CATEGORIES or k in EXCLUDED_SKUS}
     for k in pruned:
         new_map.pop(k, None)
     if pruned:
