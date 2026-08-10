@@ -10,9 +10,48 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
    Change the constants below to move the window / baseline.
 ============================================================================ */
 
-const WINDOW_START = '2026-07-01';
-const BASELINE_FROM = '2026-06-01';
-const BASELINE_TO   = '2026-06-30';
+/* ---- reporting period (auto-rolls; no monthly edits needed) ----
+   WINDOW_MODE: 'mtd'        → 1st of current month → today  (this month vs last month)
+                'prev-month' → the last full calendar month
+                'rolling'    → last ROLLING_DAYS days
+                'fixed'      → FIXED_START → today (reproduces the original Jul→now report)
+   Baseline is always the full calendar month immediately before the window's start month.
+   NOTE: the Uniware PO export only returns the last ~90 days, so keep the window
+   (and its baseline month) inside that range — 'mtd'/'prev-month'/'rolling≤60' are safe. */
+const WINDOW_MODE  = 'mtd';
+const ROLLING_DAYS = 45;
+const FIXED_START  = '2026-07-01';
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function computePeriod(today = new Date()) {
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const y = today.getUTCFullYear(), m = today.getUTCMonth();
+  const firstThis = new Date(Date.UTC(y, m, 1));
+  const firstPrev = new Date(Date.UTC(y, m - 1, 1));
+  const lastPrev  = new Date(Date.UTC(y, m, 0));
+  let winStart, winEnd = iso(today);
+  if (WINDOW_MODE === 'mtd')        { winStart = iso(firstThis); }
+  else if (WINDOW_MODE === 'prev-month') { winStart = iso(firstPrev); winEnd = iso(lastPrev); }
+  else if (WINDOW_MODE === 'rolling') { const s = new Date(today); s.setUTCDate(s.getUTCDate() - ROLLING_DAYS + 1); winStart = iso(s); }
+  else { winStart = FIXED_START; }
+  const ws = new Date(winStart + 'T00:00:00Z');
+  const bFrom = new Date(Date.UTC(ws.getUTCFullYear(), ws.getUTCMonth() - 1, 1));
+  const bTo   = new Date(Date.UTC(ws.getUTCFullYear(), ws.getUTCMonth(), 0));
+  const label = (d) => `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  return {
+    winStart, winEnd,
+    baseFrom: iso(bFrom), baseTo: iso(bTo),
+    baseLabel: label(bFrom),
+    winLabel: WINDOW_MODE === 'prev-month'
+      ? label(ws)
+      : `${new Date(winStart+'T00:00:00Z').getUTCDate()} ${MONTHS[new Date(winStart+'T00:00:00Z').getUTCMonth()]} → today`,
+  };
+}
+const PERIOD = computePeriod();
+const WINDOW_START = PERIOD.winStart;
+const WINDOW_END   = PERIOD.winEnd;
+const BASELINE_FROM = PERIOD.baseFrom;
+const BASELINE_TO   = PERIOD.baseTo;
 const PO_FACILITIES = ['astrotalk', 'MSKT_FZP'];
 const COMMIT = new Set(['APPROVED', 'COMPLETE']);
 const TEN = new Set(['Bracelets and Pendants','Crystal','Frame','Murti','RING',
@@ -37,7 +76,7 @@ const scopeOf = (r) => {
 
 /* ---------- aggregation ---------- */
 function aggregate(rows) {
-  const win  = rows.filter(r => cdate(r) >= WINDOW_START && COMMIT.has(r['Purchase Order Status']));
+  const win  = rows.filter(r => cdate(r) >= WINDOW_START && cdate(r) <= WINDOW_END && COMMIT.has(r['Purchase Order Status']));
   const june = rows.filter(r => cdate(r) >= BASELINE_FROM && cdate(r) <= BASELINE_TO && COMMIT.has(r['Purchase Order Status']));
 
   const section = (tag) => {
@@ -236,7 +275,7 @@ export default function Overview() {
       <div className="ov-root">
         <header className="ov-head">
           <div>
-            <div className="ov-eyebrow">Procurement · 01 Jul 2026 → today</div>
+            <div className="ov-eyebrow">Procurement · {PERIOD.winLabel}</div>
             <h1>Overview</h1>
           </div>
           <div className="ov-headright">
@@ -249,7 +288,7 @@ export default function Overview() {
           <Kpi label="Total procurement" value={inr(data.grand)} sub="ex-GST · committed POs" tone="accent" />
           <Kpi label="Qty received" value={qty(data.MAIN.meta.recd + data.PKG.meta.recd + data.CERT.meta.recd)} sub="units inwarded" />
           <Kpi label="Rejection rate" value={pct(rejAll(data))} sub={`${qty(data.MAIN.meta.rej + data.PKG.meta.rej + data.CERT.meta.rej)} units`} tone="warn" />
-          <Kpi label="Net cost vs June" value={inr(data.MAIN.costNet + data.PKG.costNet + data.CERT.costNet)}
+          <Kpi label={`Net cost vs ${PERIOD.baseLabel}`} value={inr(data.MAIN.costNet + data.PKG.costNet + data.CERT.costNet)}
                sub={(data.MAIN.costNet + data.PKG.costNet + data.CERT.costNet) >= 0 ? 'saved' : 'extra paid'}
                tone={(data.MAIN.costNet + data.PKG.costNet + data.CERT.costNet) >= 0 ? 'good' : 'warn'} />
         </div>
@@ -295,7 +334,7 @@ export default function Overview() {
           </div>
         </div>
 
-        <p className="ov-note">Baseline for cost difference = June 2026. CF_0001_D & CF_0029_GC compared by printing type (Digital ≥ ₹1, Offset &lt; ₹1). Values exclusive of GST; committed (APPROVED + COMPLETE) POs only.</p>
+        <p className="ov-note">Baseline for cost difference = {PERIOD.baseLabel} (auto: the month before the window). CF_0001_D & CF_0029_GC compared by printing type (Digital ≥ ₹1, Offset &lt; ₹1). Values exclusive of GST; committed (APPROVED + COMPLETE) POs only.</p>
         <style jsx global>{styles}</style>
       </div>
     );
@@ -387,7 +426,7 @@ export default function Overview() {
             <Table
               cols={[
                 { h: 'Vendor / Printing', get: r => r.vendor }, { h: 'SKU', get: r => r.sku }, { h: 'Item', get: r => r.name },
-                { h: 'June ₹', num: true, get: r => r.base.toFixed(2) }, { h: 'Window ₹', num: true, get: r => r.win.toFixed(2) },
+                { h: `${PERIOD.baseLabel} ₹`, num: true, get: r => r.base.toFixed(2) }, { h: 'Window ₹', num: true, get: r => r.win.toFixed(2) },
                 { h: 'Change %', num: true, get: r => pct(r.chgpct), cls: r => r.impact >= 0 ? 'good' : 'bad' },
                 { h: 'Qty', num: true, get: r => qty(r.wq) },
                 { h: 'Saved / (Paid more)', num: true, get: r => inr(r.impact), cls: r => r.impact >= 0 ? 'good' : 'bad' },
