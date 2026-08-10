@@ -1,5 +1,6 @@
 import Head from 'next/head';
 import { useState, useEffect, useCallback } from 'react';
+import Overview from './Overview';
 
 // ── SKU → Category map ───────────────────────────────────────────────────────
 // Using var (not const) to avoid temporal dead zone in bundled output
@@ -864,6 +865,7 @@ export default function Dashboard() {
         {/* TABS */}
         <div className="tab-bar">
           {[
+            { id: 'overview', icon: 'ti-layout-dashboard', label: 'Overview'    },
             { id: 'doc',    icon: 'ti-layout-grid',    label: 'DOC ranges'  },
             { id: 'po',     icon: 'ti-clipboard-list', label: 'Open POs'    },
             { id: 'spikes', icon: 'ti-flame',          label: 'Sales spikes'},
@@ -998,6 +1000,8 @@ export default function Dashboard() {
         )}
 
         {/* ── DOC TAB ── */}
+        {activeTab === 'overview' && <Overview />}
+
         {activeTab === 'doc' && (
           <div className="card">
             <div className="card-head">
