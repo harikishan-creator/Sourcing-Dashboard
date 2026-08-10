@@ -3,55 +3,68 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 /* ============================================================================
    Procurement Overview — Products dashboard subpage
    Data: Uniware PO export (last 90d) via /api/uniware  (trigger → poll → download)
-   Scope: window = WINDOW_START..today · committed = APPROVED+COMPLETE · value ex-GST
+   Scope: selectable month (or cumulative Since Jul) · committed = APPROVED+COMPLETE · value ex-GST
    Sections: A) 10 dashboard categories  B) Packaging (PKC*)  C) Certificates/Cards (CF*)
-   Cost difference baseline = June 2026 (BASELINE_FROM..TO), qty-weighted per vendor+SKU;
+   Cost difference baseline = the month before the selected period, qty-weighted per vendor+SKU;
    CF_0001_D & CF_0029_GC split by printing type (Digital ≥ ₹1, Offset < ₹1).
    Change the constants below to move the window / baseline.
 ============================================================================ */
 
-/* ---- reporting period (auto-rolls; no monthly edits needed) ----
-   WINDOW_MODE: 'mtd'        → 1st of current month → today  (this month vs last month)
-                'prev-month' → the last full calendar month
-                'rolling'    → last ROLLING_DAYS days
-                'fixed'      → FIXED_START → today (reproduces the original Jul→now report)
-   Baseline is always the full calendar month immediately before the window's start month.
-   NOTE: the Uniware PO export only returns the last ~90 days, so keep the window
-   (and its baseline month) inside that range — 'mtd'/'prev-month'/'rolling≤60' are safe. */
-const WINDOW_MODE  = 'mtd';
-const ROLLING_DAYS = 45;
-const FIXED_START  = '2026-07-01';
-
+/* ---- reporting period ----
+   The Overview has a month selector. START_MONTH sets the earliest selectable month.
+   Each option = one calendar month (window), with baseline = the previous month.
+   A cumulative "Since {START}" option is also offered.
+   NOTE: the Uniware PO export returns only the last ~90 days, so months older than
+   ~3 months back will read as empty (a note is shown for those). */
+const START_YEAR = 2026, START_MONTH0 = 6;   // 6 = July (0-based)
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function computePeriod(today = new Date()) {
-  const iso = (d) => d.toISOString().slice(0, 10);
-  const y = today.getUTCFullYear(), m = today.getUTCMonth();
-  const firstThis = new Date(Date.UTC(y, m, 1));
-  const firstPrev = new Date(Date.UTC(y, m - 1, 1));
-  const lastPrev  = new Date(Date.UTC(y, m, 0));
-  let winStart, winEnd = iso(today);
-  if (WINDOW_MODE === 'mtd')        { winStart = iso(firstThis); }
-  else if (WINDOW_MODE === 'prev-month') { winStart = iso(firstPrev); winEnd = iso(lastPrev); }
-  else if (WINDOW_MODE === 'rolling') { const s = new Date(today); s.setUTCDate(s.getUTCDate() - ROLLING_DAYS + 1); winStart = iso(s); }
-  else { winStart = FIXED_START; }
-  const ws = new Date(winStart + 'T00:00:00Z');
-  const bFrom = new Date(Date.UTC(ws.getUTCFullYear(), ws.getUTCMonth() - 1, 1));
-  const bTo   = new Date(Date.UTC(ws.getUTCFullYear(), ws.getUTCMonth(), 0));
-  const label = (d) => `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-  return {
-    winStart, winEnd,
-    baseFrom: iso(bFrom), baseTo: iso(bTo),
-    baseLabel: label(bFrom),
-    winLabel: WINDOW_MODE === 'prev-month'
-      ? label(ws)
-      : `${new Date(winStart+'T00:00:00Z').getUTCDate()} ${MONTHS[new Date(winStart+'T00:00:00Z').getUTCMonth()]} → today`,
-  };
+const iso = (d) => d.toISOString().slice(0, 10);
+const monthLabel = (y, m) => `${MONTHS[m]} ${y}`;
+
+// list of selectable periods: cumulative first, then each month START..current (newest first)
+function periodOptions(today = new Date()) {
+  const cy = today.getUTCFullYear(), cm = today.getUTCMonth();
+  const months = [];
+  let y = START_YEAR, m = START_MONTH0;
+  while (y < cy || (y === cy && m <= cm)) { months.push({ y, m }); m++; if (m > 11) { m = 0; y++; } }
+  const opts = months.reverse().map(({ y, m }) => ({
+    key: `${y}-${String(m + 1).padStart(2, '0')}`, label: MONTHS[m] + ' ' + String(y).slice(2), y, m, kind: 'month',
+  }));
+  opts.push({ key: 'cumulative', label: `Since ${MONTHS[START_MONTH0]}`, kind: 'cumulative' });
+  return opts;
 }
-const PERIOD = computePeriod();
-const WINDOW_START = PERIOD.winStart;
-const WINDOW_END   = PERIOD.winEnd;
-const BASELINE_FROM = PERIOD.baseFrom;
-const BASELINE_TO   = PERIOD.baseTo;
+
+// resolve a selection key -> {winStart, winEnd, baseFrom, baseTo, winLabel, baseLabel}
+function periodFor(key, today = new Date()) {
+  const cy = today.getUTCFullYear(), cm = today.getUTCMonth();
+  const isCurrentMonth = (y, m) => y === cy && m === cm;
+  const monthPeriod = (y, m) => {
+    const first = new Date(Date.UTC(y, m, 1));
+    const last  = new Date(Date.UTC(y, m + 1, 0));
+    const bFrom = new Date(Date.UTC(y, m - 1, 1));
+    const bTo   = new Date(Date.UTC(y, m, 0));
+    return {
+      winStart: iso(first),
+      winEnd: isCurrentMonth(y, m) ? iso(today) : iso(last),
+      baseFrom: iso(bFrom), baseTo: iso(bTo),
+      winLabel: isCurrentMonth(y, m) ? `${monthLabel(y, m)} (to date)` : monthLabel(y, m),
+      baseLabel: monthLabel(bFrom.getUTCFullYear(), bFrom.getUTCMonth()),
+    };
+  };
+  if (key === 'cumulative') {
+    const bFrom = new Date(Date.UTC(START_YEAR, START_MONTH0 - 1, 1));
+    const bTo   = new Date(Date.UTC(START_YEAR, START_MONTH0, 0));
+    return {
+      winStart: iso(new Date(Date.UTC(START_YEAR, START_MONTH0, 1))), winEnd: iso(today),
+      baseFrom: iso(bFrom), baseTo: iso(bTo),
+      winLabel: `${MONTHS[START_MONTH0]} ${START_YEAR} → today`,
+      baseLabel: monthLabel(bFrom.getUTCFullYear(), bFrom.getUTCMonth()),
+    };
+  }
+  const [yy, mm] = key.split('-').map(Number);
+  return monthPeriod(yy, mm - 1);
+}
+
 const PO_FACILITIES = ['astrotalk', 'MSKT_FZP'];
 const COMMIT = new Set(['APPROVED', 'COMPLETE']);
 const TEN = new Set(['Bracelets and Pendants','Crystal','Frame','Murti','RING',
@@ -75,9 +88,9 @@ const scopeOf = (r) => {
 };
 
 /* ---------- aggregation ---------- */
-function aggregate(rows) {
-  const win  = rows.filter(r => cdate(r) >= WINDOW_START && cdate(r) <= WINDOW_END && COMMIT.has(r['Purchase Order Status']));
-  const june = rows.filter(r => cdate(r) >= BASELINE_FROM && cdate(r) <= BASELINE_TO && COMMIT.has(r['Purchase Order Status']));
+function aggregate(rows, PER) {
+  const win  = rows.filter(r => cdate(r) >= PER.winStart && cdate(r) <= PER.winEnd && COMMIT.has(r['Purchase Order Status']));
+  const june = rows.filter(r => cdate(r) >= PER.baseFrom && cdate(r) <= PER.baseTo && COMMIT.has(r['Purchase Order Status']));
 
   const section = (tag) => {
     const w = win.filter(r => scopeOf(r) === tag);
@@ -235,6 +248,9 @@ export default function Overview() {
   const [view, setView] = useState('overview');   // 'overview' | 'details'
   const [section, setSection] = useState('MAIN');  // MAIN | PKG | CERT
   const [subtab, setSubtab] = useState('categories');
+  const OPTIONS = useMemo(() => periodOptions(), []);
+  const [selKey, setSelKey] = useState(() => OPTIONS[0].key);  // default: current month
+  const PER = useMemo(() => periodFor(selKey), [selKey]);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -252,7 +268,7 @@ export default function Overview() {
 
   useEffect(() => { load(); }, [load]);
 
-  const data = useMemo(() => (rows ? aggregate(rows) : null), [rows]);
+  const data = useMemo(() => (rows ? aggregate(rows, PER) : null), [rows, PER]);
 
   if (loading || !data) {
     return (
@@ -275,7 +291,7 @@ export default function Overview() {
       <div className="ov-root">
         <header className="ov-head">
           <div>
-            <div className="ov-eyebrow">Procurement · {PERIOD.winLabel}</div>
+            <div className="ov-eyebrow">Procurement · {PER.winLabel}</div>
             <h1>Overview</h1>
           </div>
           <div className="ov-headright">
@@ -284,11 +300,18 @@ export default function Overview() {
           </div>
         </header>
 
+        <div className="ov-monthbar" role="tablist" aria-label="Reporting period">
+          {OPTIONS.map(o => (
+            <button key={o.key} className={`ov-month ${selKey === o.key ? 'on' : ''} ${o.kind === 'cumulative' ? 'cum' : ''}`}
+              onClick={() => setSelKey(o.key)} aria-pressed={selKey === o.key}>{o.label}</button>
+          ))}
+        </div>
+
         <div className="ov-kpis">
           <Kpi label="Total procurement" value={inr(data.grand)} sub="ex-GST · committed POs" tone="accent" />
           <Kpi label="Qty received" value={qty(data.MAIN.meta.recd + data.PKG.meta.recd + data.CERT.meta.recd)} sub="units inwarded" />
           <Kpi label="Rejection rate" value={pct(rejAll(data))} sub={`${qty(data.MAIN.meta.rej + data.PKG.meta.rej + data.CERT.meta.rej)} units`} tone="warn" />
-          <Kpi label={`Net cost vs ${PERIOD.baseLabel}`} value={inr(data.MAIN.costNet + data.PKG.costNet + data.CERT.costNet)}
+          <Kpi label={`Net cost vs ${PER.baseLabel}`} value={inr(data.MAIN.costNet + data.PKG.costNet + data.CERT.costNet)}
                sub={(data.MAIN.costNet + data.PKG.costNet + data.CERT.costNet) >= 0 ? 'saved' : 'extra paid'}
                tone={(data.MAIN.costNet + data.PKG.costNet + data.CERT.costNet) >= 0 ? 'good' : 'warn'} />
         </div>
@@ -334,7 +357,8 @@ export default function Overview() {
           </div>
         </div>
 
-        <p className="ov-note">Baseline for cost difference = {PERIOD.baseLabel} (auto: the month before the window). CF_0001_D & CF_0029_GC compared by printing type (Digital ≥ ₹1, Offset &lt; ₹1). Values exclusive of GST; committed (APPROVED + COMPLETE) POs only.</p>
+        {data.grand === 0 && <p className="ov-empty">No committed POs found for {PER.winLabel}. Note: Uniware only returns ~90 days of PO history, so months older than that read as empty.</p>}
+        <p className="ov-note">Baseline for cost difference = {PER.baseLabel} (the month before the selected period). CF_0001_D & CF_0029_GC compared by printing type (Digital ≥ ₹1, Offset &lt; ₹1). Values exclusive of GST; committed (APPROVED + COMPLETE) POs only.</p>
         <style jsx global>{styles}</style>
       </div>
     );
@@ -351,7 +375,7 @@ export default function Overview() {
         <div>
           <button className="ov-back" onClick={() => setView('overview')}>← Overview</button>
           <h1>{secName}</h1>
-          <div className="ov-eyebrow">{inr(sec.meta.val)} · {sec.meta.skus} SKUs · {sec.meta.vendors} vendors · {sec.meta.pos} POs</div>
+          <div className="ov-eyebrow">{PER.winLabel} · {inr(sec.meta.val)} · {sec.meta.skus} SKUs · {sec.meta.vendors} vendors · {sec.meta.pos} POs</div>
         </div>
         <div className="ov-headright">
           <div className="ov-segwrap">
@@ -426,7 +450,7 @@ export default function Overview() {
             <Table
               cols={[
                 { h: 'Vendor / Printing', get: r => r.vendor }, { h: 'SKU', get: r => r.sku }, { h: 'Item', get: r => r.name },
-                { h: `${PERIOD.baseLabel} ₹`, num: true, get: r => r.base.toFixed(2) }, { h: 'Window ₹', num: true, get: r => r.win.toFixed(2) },
+                { h: `${PER.baseLabel} ₹`, num: true, get: r => r.base.toFixed(2) }, { h: 'Window ₹', num: true, get: r => r.win.toFixed(2) },
                 { h: 'Change %', num: true, get: r => pct(r.chgpct), cls: r => r.impact >= 0 ? 'good' : 'bad' },
                 { h: 'Qty', num: true, get: r => qty(r.wq) },
                 { h: 'Saved / (Paid more)', num: true, get: r => inr(r.impact), cls: r => r.impact >= 0 ? 'good' : 'bad' },
@@ -534,4 +558,11 @@ const styles = `
 .ov-costbar{display:flex;gap:18px;margin-bottom:12px;font-size:14px;font-weight:700;}
 .ov-costbar .good{color:var(--good);} .ov-costbar .bad{color:var(--bad);}
 .ov-note{font-size:11.5px;color:var(--mut);line-height:1.5;margin-top:8px;}
+.ov-monthbar{display:flex;gap:6px;flex-wrap:wrap;margin:-6px 0 16px;}
+.ov-month{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:12.5px;font-weight:600;color:var(--mut);cursor:pointer;transition:all .12s;}
+.ov-month:hover{border-color:var(--accent);color:var(--accent);}
+.ov-month.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+.ov-month.cum{margin-left:6px;border-style:dashed;}
+.ov-month.cum.on{border-style:solid;}
+.ov-empty{background:#FBF4E9;border:1px solid #E7CfA0;color:#8a6a2b;border-radius:10px;padding:12px 14px;font-size:13px;margin:6px 0 12px;}
 `;
