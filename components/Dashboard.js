@@ -1,5 +1,8 @@
 import Head from 'next/head';
 import { useState, useEffect, useCallback } from 'react';
+
+const ACCESS_TOKEN = (typeof window!=='undefined') ? (new URLSearchParams(window.location.search).get('t')||'') : '';
+const _auth = () => (ACCESS_TOKEN ? { 'x-access-token': ACCESS_TOKEN } : {});
 import Overview from './Overview';
 
 // ── SKU → Category map ───────────────────────────────────────────────────────
@@ -358,7 +361,7 @@ export default function Dashboard() {
     const runJob = async (type, facility, forceRefresh = false) => {
       try {
         const t = await fetch('/api/uniware', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json', ..._auth() },
           body: JSON.stringify({ action: 'trigger', type, facility, forceRefresh }),
         });
         const trigData = await t.json();
@@ -380,13 +383,13 @@ export default function Dashboard() {
         for (let i = 0; i < 45; i++) {
           await new Promise(r => setTimeout(r, 4000));
           const p = await fetch('/api/uniware', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json', ..._auth() },
             body: JSON.stringify({ action: 'poll', jobCode, facility }),
           });
           const pd = await p.json();
           if (pd.status === 'DONE') {
             const d = await fetch('/api/uniware', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              method: 'POST', headers: { 'Content-Type': 'application/json', ..._auth() },
               body: JSON.stringify({ action: 'download', url: pd.url, type, facility }),
             });
             const dlData = await d.json();
@@ -753,7 +756,7 @@ export default function Dashboard() {
           <div className="top-right">
             
             <button className="btn-refresh" onClick={async () => {
-              try { await fetch('/api/uniware',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'invalidate_cache'})}); } catch(e) {}
+              try { await fetch('/api/uniware',{method:'POST',headers:{'Content-Type':'application/json',..._auth()},body:JSON.stringify({action:'invalidate_cache'})}); } catch(e) {}
               fetchAll(true);
             }} disabled={loading}
               title="Full Refresh — 30-day data (~3.5 min). Clears shared cache for whole team."
