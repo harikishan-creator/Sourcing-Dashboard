@@ -13,6 +13,7 @@
 
 import { init, triggerJob, pollJob, downloadCSV } from '../../lib/mcpClient';
 import { Redis } from '@upstash/redis';
+import { checkAccess } from '../../lib/access';
 
 export const config = { maxDuration: 60 };
 
@@ -90,8 +91,14 @@ async function runFullJob(type, facility) {
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-access-token, authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
+
+  // ── SERVER-SIDE ACCESS WALL ─────────────────────────────────────────────
+  // Verifies the signed data-token from the portal shell; blocks callers who
+  // are not permitted the 'products' tab. Turn on with ACCESS_ENFORCE=true.
+  const gate = checkAccess(req, ['products','packaging','certificates']);
+  if (!gate.ok) return res.status(gate.status || 403).json({ error: 'access_denied', reason: gate.reason });
 
   if (!process.env.MCP_TOKEN) return res.status(500).json({ error: 'MCP_TOKEN not configured' });
   if (req.method === 'GET')   return res.status(200).json({ ok: true });
