@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 
+const ACCESS_TOKEN = (typeof window!=='undefined') ? (new URLSearchParams(window.location.search).get('t')||'') : '';
+const _authHeaders = () => (ACCESS_TOKEN ? { 'x-access-token': ACCESS_TOKEN } : {});
+
 /* ============================================================================
    Procurement Overview — Products dashboard subpage
    Data: Uniware PO export (last 90d) via /api/uniware  (trigger → poll → download)
@@ -184,7 +187,7 @@ function aggregate(rows, PER) {
 /* ---------- data fetch (mirrors Dashboard.js runJob) ---------- */
 async function runJob(type, facility) {
   const t = await fetch('/api/uniware', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', ..._authHeaders() },
     body: JSON.stringify({ action: 'trigger', type, facility }),
   });
   const trig = await t.json();
@@ -195,7 +198,7 @@ async function runJob(type, facility) {
   let url = null;
   for (let i = 0; i < 30; i++) {
     const p = await fetch('/api/uniware', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ..._authHeaders() },
       body: JSON.stringify({ action: 'poll', jobCode, facility }),
     });
     const pd = await p.json();
@@ -204,7 +207,7 @@ async function runJob(type, facility) {
   }
   if (!url) return [];
   const d = await fetch('/api/uniware', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', ..._authHeaders() },
     body: JSON.stringify({ action: 'download', url, type, facility }),
   });
   const dd = await d.json();
