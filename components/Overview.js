@@ -243,9 +243,17 @@ function Table({ cols, rows, foot }) {
   );
 }
 
+/* ---------- module-level cache ----------
+   Survives tab switches (component unmount/remount) within one page load, so
+   switching away from Products and back does NOT refetch. A full page reload
+   clears it (fresh data); the Refresh button forces a refetch on demand. */
+let _rowsCache = null;
+let _fetchedAt = null;
+
 /* ---------- main component ---------- */
 export default function Overview() {
-  const [rows, setRows] = useState(null);
+  const [rows, setRows] = useState(_rowsCache);       // reuse cached rows if present
+  const [fetchedAt, setFetchedAt] = useState(_fetchedAt);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [view, setView] = useState('overview');   // 'overview' | 'details'
@@ -255,7 +263,10 @@ export default function Overview() {
   const [selKey, setSelKey] = useState(() => OPTIONS[0].key);  // default: current month
   const PER = useMemo(() => periodFor(selKey), [selKey]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
+    if (!force && _rowsCache) {           // already have data → no refetch on tab switch
+      setRows(_rowsCache); setFetchedAt(_fetchedAt); return;
+    }
     setLoading(true); setErr(null);
     try {
       const all = [];
@@ -264,12 +275,14 @@ export default function Overview() {
         all.push(...r);
       }
       if (!all.length) throw new Error('No PO rows returned from Uniware.');
-      setRows(all);
+      _rowsCache = all; _fetchedAt = new Date();
+      setRows(all); setFetchedAt(_fetchedAt);
     } catch (e) { setErr(e.message || 'Failed to load'); }
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // First open → fetch. Return visits (remount) → use cache, no refetch.
+  useEffect(() => { if (!_rowsCache) load(); }, [load]);
 
   const data = useMemo(() => (rows ? aggregate(rows, PER) : null), [rows, PER]);
 
@@ -278,7 +291,7 @@ export default function Overview() {
       <div className="ov-root ov-center">
         <div className="ov-spinner" />
         <p>{err ? '' : 'Pulling live purchase orders from Uniware…'}</p>
-        {err && <div className="ov-err"><p>Couldn’t load procurement data — {err}</p><button className="ov-btn" onClick={load}>Try again</button></div>}
+        {err && <div className="ov-err"><p>Couldn’t load procurement data — {err}</p><button className="ov-btn" onClick={() => load(true)}>Try again</button></div>}
         <style jsx global>{styles}</style>
       </div>
     );
@@ -286,7 +299,7 @@ export default function Overview() {
 
   const sec = data[section];
   const secName = { MAIN: '10 Dashboard Categories', PKG: 'Packaging (PKC)', CERT: 'Certificates & Cards (CF)' }[section];
-  const asOf = data.fetchedAt.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const asOf = (fetchedAt || data.fetchedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
   /* ---------------- OVERVIEW (summary) ---------------- */
   if (view === 'overview') {
@@ -299,7 +312,7 @@ export default function Overview() {
           </div>
           <div className="ov-headright">
             <span className="ov-asof">Live · {asOf}</span>
-            <button className="ov-btn" onClick={load}>↻ Refresh</button>
+            <button className="ov-btn" onClick={() => load(true)}>↻ Refresh</button>
           </div>
         </header>
 
