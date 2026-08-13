@@ -453,6 +453,7 @@ export default function Overview() {
             <h1>{drill.key}</h1>
             <div className="ov-eyebrow">{isCat ? 'Category' : 'Vendor'} · {PER.winLabel}</div>
           </div>
+          <button className="ov-closebtn" onClick={back} title="Close" aria-label="Close">×</button>
         </header>
 
         <div className="ov-kpis">
@@ -465,7 +466,7 @@ export default function Overview() {
         {isCat ? (
           <>
             <div className="ov-card">
-              <h3>Vendors supplying {drill.key}</h3>
+              <div className="ov-cardhead"><h3>Vendors supplying {drill.key}</h3><button className="ov-cardclose" onClick={back} title="Close" aria-label="Close">×</button></div>
               <Table
                 cols={[
                   { h: 'Vendor', get: r => r.k },
@@ -481,7 +482,7 @@ export default function Overview() {
               />
             </div>
             <div className="ov-card">
-              <h3>Items in {drill.key}</h3>
+              <div className="ov-cardhead"><h3>Items in {drill.key}</h3><button className="ov-cardclose" onClick={back} title="Close" aria-label="Close">×</button></div>
               <Table
                 cols={[
                   { h: 'Item', get: r => r.name || r.k },
@@ -498,7 +499,7 @@ export default function Overview() {
         ) : (
           <>
             <div className="ov-card">
-              <h3>Categories from {drill.key}</h3>
+              <div className="ov-cardhead"><h3>Categories from {drill.key}</h3><button className="ov-cardclose" onClick={back} title="Close" aria-label="Close">×</button></div>
               <Table
                 cols={[
                   { h: 'Category', get: r => r.k },
@@ -514,7 +515,7 @@ export default function Overview() {
               />
             </div>
             <div className="ov-card">
-              <h3>Items from {drill.key}</h3>
+              <div className="ov-cardhead"><h3>Items from {drill.key}</h3><button className="ov-cardclose" onClick={back} title="Close" aria-label="Close">×</button></div>
               <Table
                 cols={[
                   { h: 'Item', get: r => r.name || r.k },
@@ -549,6 +550,7 @@ export default function Overview() {
           <div className="ov-eyebrow">{PER.winLabel} · {inr(sec.meta.val)} · {sec.meta.skus} SKUs · {sec.meta.vendors} vendors · {sec.meta.pos} POs</div>
         </div>
         <div className="ov-headright">
+          <button className="ov-closebtn" onClick={() => setView('overview')} title="Close" aria-label="Close">×</button>
           <div className="ov-segwrap">
             {['MAIN', 'PKG', 'CERT'].map(k => (
               <button key={k} className={`ov-seg ${section === k ? 'on' : ''}`}
@@ -697,6 +699,13 @@ const styles = `
 .ov-btn{background:var(--accent);color:#fff;border:none;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;}
 .ov-btn:hover{filter:brightness(1.06);}
 .ov-back{background:none;border:none;color:var(--accent);font-size:13px;font-weight:600;cursor:pointer;padding:0;margin-bottom:4px;}
+.ov-head{position:sticky;top:0;z-index:20;background:var(--bg);padding-top:6px;}
+.ov-closebtn{background:var(--card);border:1px solid var(--line);border-radius:8px;width:34px;height:34px;font-size:20px;line-height:1;color:var(--mut);cursor:pointer;flex:none;}
+.ov-closebtn:hover{border-color:var(--accent);color:var(--accent);}
+.ov-cardhead{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.ov-cardhead h3{margin:0;}
+.ov-cardclose{background:none;border:none;font-size:20px;line-height:1;color:var(--mut);cursor:pointer;padding:0 4px;border-radius:6px;}
+.ov-cardclose:hover{color:var(--accent);}
 .ov-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px;}
 .ov-kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;}
 .ov-kpi-val{font-size:26px;font-weight:700;letter-spacing:-.02em;}
