@@ -177,7 +177,32 @@ function aggregate(rows, PER) {
       .map(([k, d]) => { const [c, v] = k.split('||'); return { cat: c, vendor: v, skus: d.skus.size, ord: d.ord, recd: d.recd, val: d.val }; })
       .sort((a, b) => a.cat.localeCompare(b.cat) || b.val - a.val);
 
-    return { meta, cat, vend, sku, cost, catVend, costNet: saved - paid, saved, paid };
+    // per-entity breakdowns for drill-down
+    const gv = (list, keyFn) => {
+      const m = new Map();
+      for (const r of list) {
+        const k = keyFn(r); if (k === null) continue;
+        if (!m.has(k)) m.set(k, { val:0, ord:0, recd:0, rej:0, skus:new Set(), vends:new Set(), cats:new Set() });
+        const g = m.get(k); const q = num(r['Order Quantity']), u = num(r['Unit Price']);
+        g.val += q*u; g.ord += q; g.recd += num(r['Recieved Quantity']); g.rej += num(r['Rejected Quantity']);
+        g.skus.add(r['Item SkuCode']); g.vends.add((r['Vendor Name']||'').trim()); g.cats.add((r['Category']||'').trim());
+      }
+      return m;
+    };
+    const byCat = {}, byVend = {};
+    for (const c of cat.map(x => x.k)) {
+      const rowsC = w.filter(r => (r['Category']||'').trim() === c);
+      const vend2 = [...gv(rowsC, r => (r['Vendor Name']||'').trim())].map(([k,d]) => ({ k, skus:d.skus.size, ord:d.ord, recd:d.recd, val:d.val, rej:d.rej, rejrate: rateOf(d.rej,d.recd) })).sort((a,b)=>b.val-a.val);
+      const sku2  = [...gv(rowsC, r => r['Item SkuCode'])].map(([k,d]) => ({ k, name:(rowsC.find(r=>r['Item SkuCode']===k)||{})['Item Type Name']||'', ord:d.ord, recd:d.recd, val:d.val, rej:d.rej, rejrate: rateOf(d.rej,d.recd) })).sort((a,b)=>b.val-a.val);
+      byCat[c] = { meta: cat.find(x=>x.k===c), vendors: vend2, skus: sku2 };
+    }
+    for (const v of vend.map(x => x.k)) {
+      const rowsV = w.filter(r => (r['Vendor Name']||'').trim() === v);
+      const cats2 = [...gv(rowsV, r => (r['Category']||'').trim())].map(([k,d]) => ({ k, skus:d.skus.size, ord:d.ord, recd:d.recd, val:d.val, rej:d.rej, rejrate: rateOf(d.rej,d.recd) })).sort((a,b)=>b.val-a.val);
+      const sku2  = [...gv(rowsV, r => r['Item SkuCode'])].map(([k,d]) => ({ k, name:(rowsV.find(r=>r['Item SkuCode']===k)||{})['Item Type Name']||'', cat:(rowsV.find(r=>r['Item SkuCode']===k)||{})['Category']||'', ord:d.ord, recd:d.recd, val:d.val, rej:d.rej, rejrate: rateOf(d.rej,d.recd) })).sort((a,b)=>b.val-a.val);
+      byVend[v] = { meta: vend.find(x=>x.k===v), cats: cats2, skus: sku2 };
+    }
+    return { meta, cat, vend, sku, cost, catVend, byCat, byVend, costNet: saved - paid, saved, paid };
   };
 
   const MAIN = section('MAIN'), PKG = section('PKG'), CERT = section('CERT');
@@ -223,21 +248,39 @@ const Kpi = ({ label, value, sub, tone }) => (
   </div>
 );
 
-function Table({ cols, rows, foot }) {
+function Table({ cols, rows, foot, onRowClick, searchable, placeholder }) {
+  const [q, setQ] = useState('');
+  const ql = q.trim().toLowerCase();
+  const shown = ql
+    ? rows.filter(r => cols.some(c => String(c.get(r) ?? '').toLowerCase().includes(ql)))
+    : rows;
   return (
     <div className="ov-tablewrap">
+      {searchable && (
+        <div className="ov-searchrow">
+          <span className="ov-searchicon">⌕</span>
+          <input className="ov-search" value={q} onChange={e => setQ(e.target.value)}
+                 placeholder={placeholder || 'Search…'} />
+          {ql && <span className="ov-searchcount">{shown.length} of {rows.length}</span>}
+          {ql && <button className="ov-searchclear" onClick={() => setQ('')} aria-label="Clear">×</button>}
+        </div>
+      )}
       <table className="ov-table">
         <thead><tr>{cols.map((c, i) => <th key={i} className={c.num ? 'r' : ''}>{c.h}</th>)}</tr></thead>
         <tbody>
-          {rows.map((row, ri) => (
-            <tr key={ri}>{cols.map((c, ci) => {
+          {shown.map((row, ri) => (
+            <tr key={ri} className={onRowClick ? 'clickable' : ''}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}>{cols.map((c, ci) => {
               const v = c.get(row);
               const cls = (c.num ? 'r ' : '') + (c.cls ? c.cls(row) : '');
               return <td key={ci} className={cls.trim()}>{v}</td>;
             })}</tr>
           ))}
+          {shown.length === 0 && (
+            <tr><td colSpan={cols.length} style={{ textAlign: 'center', color: 'var(--mut)', padding: '18px' }}>No matches</td></tr>
+          )}
         </tbody>
-        {foot && <tfoot><tr>{foot.map((f, i) => <td key={i} className={f.num ? 'r' : ''}>{f.v}</td>)}</tr></tfoot>}
+        {foot && !ql && <tfoot><tr>{foot.map((f, i) => <td key={i} className={f.num ? 'r' : ''}>{f.v}</td>)}</tr></tfoot>}
       </table>
     </div>
   );
@@ -259,6 +302,8 @@ export default function Overview() {
   const [view, setView] = useState('overview');   // 'overview' | 'details'
   const [section, setSection] = useState('MAIN');  // MAIN | PKG | CERT
   const [subtab, setSubtab] = useState('categories');
+  const [drill, setDrill] = useState(null);   // { kind:'category'|'vendor', key } or null
+  const openDrill = (kind, key) => { setDrill({ kind, key }); setView('drill'); };
   const OPTIONS = useMemo(() => periodOptions(), []);
   const [selKey, setSelKey] = useState(() => OPTIONS[0].key);  // default: current month
   const PER = useMemo(() => periodFor(selKey), [selKey]);
@@ -358,7 +403,9 @@ export default function Overview() {
                 { h: 'Share', num: true, get: r => pct(r.val / data.MAIN.meta.val * 100) },
               ]}
               rows={data.MAIN.cat.slice(0, 6)}
+              onRowClick={r => openDrill('category', r.k)}
             />
+            <div className="ov-drillhint">Tap a category for its vendors, items &amp; rejection →</div>
           </div>
           <div className="ov-card">
             <h3>Top vendors by spend</h3>
@@ -369,12 +416,120 @@ export default function Overview() {
                 { h: 'Rej %', num: true, get: r => pct(r.rejrate), cls: r => r.rejrate >= 10 ? 'bad' : r.rejrate >= 5 ? 'mid' : '' },
               ]}
               rows={data.MAIN.vend.slice(0, 6)}
+              onRowClick={r => openDrill('vendor', r.k)}
             />
+            <div className="ov-drillhint">Tap a vendor for its items, categories &amp; rejection →</div>
           </div>
         </div>
 
         {data.grand === 0 && <p className="ov-empty">No committed POs found for {PER.winLabel}. Note: Uniware only returns ~90 days of PO history, so months older than that read as empty.</p>}
         <p className="ov-note">Baseline for cost difference = {PER.baseLabel} (the month before the selected period). CF_0001_D & CF_0029_GC compared by printing type (Digital ≥ ₹1, Offset &lt; ₹1). Values exclusive of GST; committed (APPROVED + COMPLETE) POs only.</p>
+        <style jsx global>{styles}</style>
+      </div>
+    );
+  }
+
+
+  /* ---------------- DRILL-DOWN (single category or vendor) ---------------- */
+  if (view === 'drill' && drill) {
+    const isCat = drill.kind === 'category';
+    const rec = isCat ? sec.byCat[drill.key] : sec.byVend[drill.key];
+    const m = rec && rec.meta;
+    const back = () => { setDrill(null); setView('overview'); };
+    if (!rec || !m) {
+      return (
+        <div className="ov-root">
+          <header className="ov-head"><div><button className="ov-back" onClick={back}>← Overview</button><h1>{drill.key}</h1></div></header>
+          <p className="ov-note">No data for this {drill.kind} in {PER.winLabel}.</p>
+          <style jsx global>{styles}</style>
+        </div>
+      );
+    }
+    return (
+      <div className="ov-root">
+        <header className="ov-head">
+          <div>
+            <button className="ov-back" onClick={back}>← Overview</button>
+            <h1>{drill.key}</h1>
+            <div className="ov-eyebrow">{isCat ? 'Category' : 'Vendor'} · {PER.winLabel}</div>
+          </div>
+        </header>
+
+        <div className="ov-kpis">
+          <Kpi label="Procurement value" value={inr(m.val)} sub="ex-GST" tone="accent" />
+          <Kpi label={isCat ? 'Vendors' : 'Categories'} value={isCat ? m.vendors : (rec.cats ? rec.cats.length : 0)} />
+          <Kpi label="Items (SKUs)" value={m.skus} />
+          <Kpi label="Rejection rate" value={pct(m.rejrate)} sub={`${qty(m.rej)} units`} tone={m.rejrate >= 5 ? 'warn' : ''} />
+        </div>
+
+        {isCat ? (
+          <>
+            <div className="ov-card">
+              <h3>Vendors supplying {drill.key}</h3>
+              <Table
+                cols={[
+                  { h: 'Vendor', get: r => r.k },
+                  { h: 'Items', num: true, get: r => r.skus },
+                  { h: 'Ordered', num: true, get: r => qty(r.ord) },
+                  { h: 'Received', num: true, get: r => qty(r.recd) },
+                  { h: 'Value', num: true, get: r => inr(r.val) },
+                  { h: 'Rej %', num: true, get: r => pct(r.rejrate), cls: r => r.rejrate >= 10 ? 'bad' : r.rejrate >= 5 ? 'mid' : '' },
+                ]}
+                rows={rec.vendors}
+                onRowClick={r => openDrill('vendor', r.k)}
+                searchable placeholder="Search vendors…"
+              />
+            </div>
+            <div className="ov-card">
+              <h3>Items in {drill.key}</h3>
+              <Table
+                cols={[
+                  { h: 'Item', get: r => r.name || r.k },
+                  { h: 'Ordered', num: true, get: r => qty(r.ord) },
+                  { h: 'Received', num: true, get: r => qty(r.recd) },
+                  { h: 'Value', num: true, get: r => inr(r.val) },
+                  { h: 'Rej %', num: true, get: r => pct(r.rejrate), cls: r => r.rejrate >= 10 ? 'bad' : r.rejrate >= 5 ? 'mid' : '' },
+                ]}
+                rows={rec.skus}
+                searchable placeholder="Search items…"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="ov-card">
+              <h3>Categories from {drill.key}</h3>
+              <Table
+                cols={[
+                  { h: 'Category', get: r => r.k },
+                  { h: 'Items', num: true, get: r => r.skus },
+                  { h: 'Ordered', num: true, get: r => qty(r.ord) },
+                  { h: 'Received', num: true, get: r => qty(r.recd) },
+                  { h: 'Value', num: true, get: r => inr(r.val) },
+                  { h: 'Rej %', num: true, get: r => pct(r.rejrate), cls: r => r.rejrate >= 10 ? 'bad' : r.rejrate >= 5 ? 'mid' : '' },
+                ]}
+                rows={rec.cats}
+                onRowClick={r => openDrill('category', r.k)}
+                searchable placeholder="Search categories…"
+              />
+            </div>
+            <div className="ov-card">
+              <h3>Items from {drill.key}</h3>
+              <Table
+                cols={[
+                  { h: 'Item', get: r => r.name || r.k },
+                  { h: 'Category', get: r => r.cat },
+                  { h: 'Ordered', num: true, get: r => qty(r.ord) },
+                  { h: 'Received', num: true, get: r => qty(r.recd) },
+                  { h: 'Value', num: true, get: r => inr(r.val) },
+                  { h: 'Rej %', num: true, get: r => pct(r.rejrate), cls: r => r.rejrate >= 10 ? 'bad' : r.rejrate >= 5 ? 'mid' : '' },
+                ]}
+                rows={rec.skus}
+                searchable placeholder="Search items…"
+              />
+            </div>
+          </>
+        )}
         <style jsx global>{styles}</style>
       </div>
     );
@@ -421,6 +576,7 @@ export default function Overview() {
               { h: 'Value (ex-GST)', num: true, get: r => inr(r.val) },
             ]}
             rows={sec.cat}
+            onRowClick={section === 'MAIN' ? (r => openDrill('category', r.k)) : undefined}
             foot={[{ v: 'TOTAL' }, { v: '', num: true }, { v: '', num: true }, { v: '', num: true }, { v: '', num: true }, { v: '', num: true }, { v: inr(sec.meta.val), num: true }]}
           />
         )}
@@ -432,6 +588,8 @@ export default function Overview() {
               { h: 'Value (ex-GST)', num: true, get: r => inr(r.val) },
             ]}
             rows={sec.vend}
+            onRowClick={r => openDrill('vendor', r.k)}
+            searchable placeholder="Search vendors…"
             foot={[{ v: 'TOTAL' }, { v: '', num: true }, { v: '', num: true }, { v: '', num: true }, { v: '', num: true }, { v: inr(sec.meta.val), num: true }]}
           />
         )}
@@ -443,6 +601,7 @@ export default function Overview() {
               { h: 'Value (ex-GST)', num: true, get: r => inr(r.val) },
             ]}
             rows={sec.sku}
+            searchable placeholder="Search items…"
             foot={[{ v: 'TOTAL' }, { v: '' }, { v: '' }, { v: '', num: true }, { v: '', num: true }, { v: inr(sec.meta.val), num: true }]}
           />
         )}
@@ -454,6 +613,7 @@ export default function Overview() {
               { h: 'Pending', num: true, get: r => qty(r.pend) }, { h: 'Fill %', num: true, get: r => pct(r.fill) },
             ]}
             rows={[...sec.sku].sort((a, b) => b.recd - a.recd)}
+            searchable placeholder="Search items…"
           />
         )}
         {subtab === 'cost' && (
@@ -472,6 +632,7 @@ export default function Overview() {
                 { h: 'Saved / (Paid more)', num: true, get: r => inr(r.impact), cls: r => r.impact >= 0 ? 'good' : 'bad' },
               ]}
               rows={sec.cost}
+              searchable placeholder="Search item / vendor…"
             />
           </>
         )}
@@ -505,6 +666,7 @@ export default function Overview() {
               { h: 'Value (ex-GST)', num: true, get: r => inr(r.val) },
             ]}
             rows={sec.catVend}
+            searchable placeholder="Search category / vendor…"
           />
         )}
       </div>
@@ -574,6 +736,18 @@ const styles = `
 .ov-costbar{display:flex;gap:18px;margin-bottom:12px;font-size:14px;font-weight:700;}
 .ov-costbar .good{color:var(--good);} .ov-costbar .bad{color:var(--bad);}
 .ov-note{font-size:11.5px;color:var(--mut);line-height:1.5;margin-top:8px;}
+.ov-table tr.clickable{cursor:pointer;}
+.ov-table tr.clickable:hover td{background:var(--accentbg);}
+.ov-table tr.clickable td:first-child{position:relative;}
+.ov-table tr.clickable:hover td:first-child{color:var(--accent);font-weight:600;}
+.ov-drillhint{font-size:11px;color:var(--mut);margin-top:8px;font-style:italic;}
+.ov-searchrow{display:flex;align-items:center;gap:8px;padding:6px 4px 10px;position:relative;}
+.ov-searchicon{color:var(--mut);font-size:15px;}
+.ov-search{flex:1;max-width:340px;padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--ink);}
+.ov-search:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(138,90,43,.12);}
+.ov-searchcount{font-size:11.5px;color:var(--mut);}
+.ov-searchclear{border:none;background:none;color:var(--mut);font-size:18px;line-height:1;cursor:pointer;padding:0 4px;}
+.ov-searchclear:hover{color:var(--accent);}
 .ov-monthbar{display:flex;gap:6px;flex-wrap:wrap;margin:-6px 0 16px;}
 .ov-month{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:12.5px;font-weight:600;color:var(--mut);cursor:pointer;transition:all .12s;}
 .ov-month:hover{border-color:var(--accent);color:var(--accent);}
