@@ -7,7 +7,7 @@ const _authHeaders = () => (ACCESS_TOKEN ? { 'x-access-token': ACCESS_TOKEN } : 
    Procurement Overview — Products dashboard subpage
    Data: Uniware PO export (last 90d) via /api/uniware  (trigger → poll → download)
    Scope: selectable month (or cumulative Since Jul) · committed = APPROVED+COMPLETE · value ex-GST
-   Sections: A) 10 dashboard categories  B) Packaging (PKC*)  C) Certificates/Cards (CF*)
+   Sections: A) 11 dashboard categories  B) Packaging (PKC*)  C) Certificates/Cards (CF*)
    Cost difference baseline = the month before the selected period, qty-weighted per vendor+SKU;
    CF_0001_D & CF_0029_GC split by printing type (Digital ≥ ₹1, Offset < ₹1).
    Change the constants below to move the window / baseline.
@@ -70,8 +70,9 @@ function periodFor(key, today = new Date()) {
 
 const PO_FACILITIES = ['astrotalk', 'MSKT_FZP'];
 const COMMIT = new Set(['APPROVED', 'COMPLETE']);
+// Section A dashboard categories (Lumus added → 11)
 const TEN = new Set(['Bracelets and Pendants','Crystal','Frame','Murti','RING',
-                     'Rudraksha','Selenite','Vastu','Wall Hanging','Womens Jewellery']);
+                     'Rudraksha','Selenite','Vastu','Wall Hanging','Womens Jewellery','Lumus']);
 const PT_SKUS = new Set(['CF_0001_D', 'CF_0029_GC']);
 
 /* ---------- helpers ---------- */
@@ -343,7 +344,7 @@ export default function Overview() {
   }
 
   const sec = data[section];
-  const secName = { MAIN: '10 Dashboard Categories', PKG: 'Packaging (PKC)', CERT: 'Certificates & Cards (CF)' }[section];
+  const secName = { MAIN: '11 Dashboard Categories', PKG: 'Packaging (PKC)', CERT: 'Certificates & Cards (CF)' }[section];
   const asOf = (fetchedAt || data.fetchedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
   /* ---------------- OVERVIEW (summary) ---------------- */
@@ -378,7 +379,7 @@ export default function Overview() {
         </div>
 
         <div className="ov-sections">
-          {[['MAIN', '10 Dashboard Categories', 'accent'], ['PKG', 'Packaging (PKC)', 'plum'], ['CERT', 'Certificates & Cards (CF)', 'gold']].map(([k, label, tone]) => {
+          {[['MAIN', '11 Dashboard Categories', 'accent'], ['PKG', 'Packaging (PKC)', 'plum'], ['CERT', 'Certificates & Cards (CF)', 'gold']].map(([k, label, tone]) => {
             const s = data[k];
             return (
               <button key={k} className={`ov-seccard ${tone}`} onClick={() => { setSection(k); setSubtab('categories'); setView('details'); }}>
